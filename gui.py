@@ -1,5 +1,6 @@
 import sys
 import base64
+import instruments_db as db
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QToolBar, QPushButton, QTableWidget, QHeaderView,
@@ -97,11 +98,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Робот — Панель управления")
         self.setMinimumSize(900, 500)
-        self.setWindowIcon(get_icon())   # ← фото как иконка
+        self.setWindowIcon(get_icon())
 
         self._build_toolbar()
         self._build_central()
+        self._load_from_db()        # ← загружаем данные из БД при старте
 
+    # ── Тулбар ─────────────────────────────────
     def _build_toolbar(self):
         toolbar = QToolBar("Главная панель")
         toolbar.setMovable(False)
@@ -130,6 +133,7 @@ class MainWindow(QMainWindow):
         btn_add.clicked.connect(self.on_add_clicked)
         toolbar.addWidget(btn_add)
 
+    # ── Центральный виджет ───────────────────────
     def _build_central(self):
         central = QWidget()
         self.setCentralWidget(central)
@@ -167,10 +171,40 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.table)
 
+    # ── Загрузка существующих записей из БД ──────
+    def _load_from_db(self):
+        try:
+            rows = db.fetch_all_instruments()
+            for r in rows:
+                self._add_row(r["name"], r["isin"], r["board"])
+        except Exception as e:
+            QMessageBox.warning(self, "БД", f"Не удалось загрузить данные:\n{e}")
+
+    # ── Обработчики ─────────────────────────────
     def on_add_clicked(self):
         dlg = AddInstrumentDialog(self)
-        if dlg.exec_() == QDialog.Accepted:
-            self._add_row(dlg.get_name(), dlg.get_isin(), dlg.get_board())
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        name  = dlg.get_name()
+        isin  = dlg.get_isin()
+        board = dlg.get_board()
+
+        # Сохраняем в БД
+        try:
+            ok = db.insert_instrument(name, isin, board)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка БД", str(e))
+            return
+
+        if not ok:
+            QMessageBox.warning(
+                self, "Дубликат",
+                f"Инструмент с ISIN «{isin}» уже существует."
+            )
+            return
+
+        self._add_row(name, isin, board)
 
     def _add_row(self, name: str, isin: str, board: str):
         row = self.table.rowCount()
@@ -192,4 +226,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import instruments_db as db   # импорт здесь, чтобы файл можно было импортировать без БД
+    db.init_db()                  # создаёт БД и таблицу, если нет
     sys.exit(main())
