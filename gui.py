@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QToolBar, QPushButton, QTableWidget, QHeaderView,
     QDialog, QFormLayout, QLineEdit, QLabel, QMessageBox,
-    QTableWidgetItem, QDialogButtonBox
+    QTableWidgetItem, QDialogButtonBox, QInputDialog
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray
 from PyQt5.QtGui import QFont, QIcon, QPixmap
@@ -124,14 +124,30 @@ class MainWindow(QMainWindow):
                 padding: 5px 14px;
                 font-weight: bold;
             }
-            QPushButton:hover  { background: #5ab870; }
-            QPushButton:pressed { background: #3a8050; }
+            QPushButton#btn_add:hover   { background: #5ab870; }
+            QPushButton#btn_add:pressed { background: #3a8050; }
+            QPushButton#btn_del {
+                background: #9d4a4a;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 5px 14px;
+                font-weight: bold;
+            }
+            QPushButton#btn_del:hover   { background: #b85a5a; }
+            QPushButton#btn_del:pressed { background: #803a3a; }
         """)
         self.addToolBar(toolbar)
 
         btn_add = QPushButton("+ Добавить")
+        btn_add.setObjectName("btn_add")
         btn_add.clicked.connect(self.on_add_clicked)
         toolbar.addWidget(btn_add)
+
+        btn_del = QPushButton("— Удалить")
+        btn_del.setObjectName("btn_del")
+        btn_del.clicked.connect(self.on_delete_clicked)
+        toolbar.addWidget(btn_del)
 
     # ── Центральный виджет ───────────────────────
     def _build_central(self):
@@ -205,6 +221,54 @@ class MainWindow(QMainWindow):
             return
 
         self._add_row(name, isin, board)
+
+    def on_delete_clicked(self):
+        isin, ok = QInputDialog.getText(
+            self, "Удалить инструмент", "Введите ISIN:"
+        )
+        if not ok:
+            return
+
+        isin = isin.strip()
+        if not isin:
+            QMessageBox.warning(self, "Ошибка", "ISIN не может быть пустым.")
+            return
+
+        # Ищем строку в таблице
+        row_to_delete = None
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 1)   # колонка ISIN
+            if item and item.text() == isin:
+                row_to_delete = row
+                break
+
+        if row_to_delete is None:
+            QMessageBox.warning(
+                self, "Не найден",
+                f"Инструмент с ISIN «{isin}» не найден в таблице."
+            )
+            return
+
+        # Подтверждение
+        name_item = self.table.item(row_to_delete, 0)
+        name = name_item.text() if name_item else isin
+        reply = QMessageBox.question(
+            self, "Подтверждение",
+            f"Удалить «{name}» ({isin})?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        # Удаляем из БД
+        try:
+            db.delete_instrument(isin)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка БД", str(e))
+            return
+
+        # Удаляем из таблицы GUI
+        self.table.removeRow(row_to_delete)
 
     def _add_row(self, name: str, isin: str, board: str):
         row = self.table.rowCount()
