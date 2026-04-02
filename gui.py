@@ -87,7 +87,10 @@ class ToggleWidget(QWidget):
         self._grp.blockSignals(False)
 
         self._grp.buttonClicked.connect(self._on_toggle)
-        self.setStyleSheet("background: transparent;")
+        self.setStyleSheet(
+            "QWidget { background: transparent; }"
+            " QRadioButton { color: #dcdcdc; }"
+        )
 
     def _on_toggle(self):
         val = "ON" if self._r_on.isChecked() else "OFF"
@@ -207,7 +210,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Робот — Панель управления")
-        self.setMinimumSize(1400, 500)
+        self.resize(1400, 600)  # начальный размер, без жёсткого минимума
         self.setWindowIcon(get_icon())
         self._build_toolbar()
         self._build_central()
@@ -247,7 +250,7 @@ class MainWindow(QMainWindow):
 
         self.table = QTableWidget(0, len(HEADERS))
         self.table.setHorizontalHeaderLabels(HEADERS)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
