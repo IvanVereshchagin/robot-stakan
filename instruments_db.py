@@ -53,7 +53,9 @@ DDL_STATEMENTS = [
         trades_curr      INT     NOT NULL DEFAULT 0,
         big_bid_alert_qty INT    NOT NULL DEFAULT 0,
         tgapi             TEXT   NOT NULL DEFAULT '',
-        tgchat            TEXT   NOT NULL DEFAULT ''
+        tgchat            TEXT   NOT NULL DEFAULT '',
+        account           TEXT   NOT NULL DEFAULT '',
+        client_code       TEXT   NOT NULL DEFAULT ''
     );
     """,
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_instruments_isin ON instruments (isin);",
@@ -72,6 +74,24 @@ DDL_STATEMENTS = [
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS big_bid_alert_qty INT NOT NULL DEFAULT 0;",
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS tgapi TEXT NOT NULL DEFAULT '';",
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS tgchat TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS account TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS client_code TEXT NOT NULL DEFAULT '';",
+
+    # Аккаунты
+    """
+    CREATE TABLE IF NOT EXISTS accounts (
+        id      BIGSERIAL PRIMARY KEY,
+        account TEXT NOT NULL UNIQUE
+    );
+    """,
+
+    # Коды клиентов
+    """
+    CREATE TABLE IF NOT EXISTS client_codes (
+        id          BIGSERIAL PRIMARY KEY,
+        client_code TEXT NOT NULL UNIQUE
+    );
+    """,
 
     # Telegram: API tokens
     """
@@ -95,7 +115,7 @@ ALLOWED_FIELDS = {
     "condition", "battle_regime", "trade_interval",
     "best_offer_qty", "best_offer", "price_limit",
     "bid_limit", "trades_limit", "big_bid_alert_qty",
-    "tgapi", "tgchat",
+    "tgapi", "tgchat", "account", "client_code",
 }
 
 
@@ -219,3 +239,46 @@ def delete_tgchat(value: str) -> None:
     con = get_connection()
     with con.cursor() as cur:
         cur.execute("DELETE FROM tgchat WHERE tgchat = %s", (value.strip(),))
+
+# ─── Accounts ─────────────────────────────────────────────────────────────────
+def fetch_accounts() -> list:
+    con = get_connection()
+    with con.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT account FROM accounts ORDER BY account")
+        return [r["account"] for r in cur.fetchall()]
+
+def insert_account(value: str) -> bool:
+    con = get_connection()
+    try:
+        with con.cursor() as cur:
+            cur.execute("INSERT INTO accounts (account) VALUES (%s)", (value.strip(),))
+        return True
+    except psycopg2.errors.UniqueViolation:
+        return False
+
+def delete_account(value: str) -> None:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute("DELETE FROM accounts WHERE account = %s", (value.strip(),))
+
+
+# ─── Client codes ─────────────────────────────────────────────────────────────
+def fetch_client_codes() -> list:
+    con = get_connection()
+    with con.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT client_code FROM client_codes ORDER BY client_code")
+        return [r["client_code"] for r in cur.fetchall()]
+
+def insert_client_code(value: str) -> bool:
+    con = get_connection()
+    try:
+        with con.cursor() as cur:
+            cur.execute("INSERT INTO client_codes (client_code) VALUES (%s)", (value.strip(),))
+        return True
+    except psycopg2.errors.UniqueViolation:
+        return False
+
+def delete_client_code(value: str) -> None:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute("DELETE FROM client_codes WHERE client_code = %s", (value.strip(),))

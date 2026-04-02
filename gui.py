@@ -40,6 +40,8 @@ HEADERS = [
     "Большой бид\n(Алерт)",
     "API\nTelegram",
     "Chat ID\nTelegram",
+    "Аккаунт",
+    "Код клиента",
 ]
 
 # Соответствие индекса колонки → поле БД (None = read-only отображение)
@@ -58,6 +60,8 @@ COL_FIELD = {
     11: "big_bid_alert_qty",    # Большой бид алерт
     12: "tgapi",               # API Telegram
     13: "tgchat",              # Chat ID Telegram
+    14: "account",             # Аккаунт
+    15: "client_code",         # Код клиента
 }
 
 
@@ -415,6 +419,10 @@ class MainWindow(QMainWindow):
                                   border-radius:4px; padding:5px 14px; font-weight:bold; }
             QPushButton#btn_tg:hover   { background:#3a85c8; }
             QPushButton#btn_tg:pressed { background:#22518a; }
+            QPushButton#btn_acc { background:#8a6a2e; color:white; border:none;
+                                  border-radius:4px; padding:5px 14px; font-weight:bold; }
+            QPushButton#btn_acc:hover   { background:#a8822e; }
+            QPushButton#btn_acc:pressed { background:#6a5020; }
         """)
         self.addToolBar(tb)
 
@@ -433,6 +441,14 @@ class MainWindow(QMainWindow):
         btn_tgchat = QPushButton("💬 Chat ID Telegram"); btn_tgchat.setObjectName("btn_tg")
         btn_tgchat.clicked.connect(self.on_tgchat_clicked)
         tb.addWidget(btn_tgchat)
+
+        btn_acc = QPushButton("👤 Аккаунты"); btn_acc.setObjectName("btn_acc")
+        btn_acc.clicked.connect(self.on_accounts_clicked)
+        tb.addWidget(btn_acc)
+
+        btn_cc = QPushButton("🏷 Счета"); btn_cc.setObjectName("btn_acc")
+        btn_cc.clicked.connect(self.on_client_codes_clicked)
+        tb.addWidget(btn_cc)
 
     # ── Центральный виджет ───────────────────────────────────────────────────
     def _build_central(self):
@@ -525,6 +541,16 @@ class MainWindow(QMainWindow):
             isin, "tgchat", db.fetch_tgchat, r.get("tgchat", "")
         ))
 
+        # 14 — Аккаунт
+        self.table.setCellWidget(row, 14, ComboWidget(
+            isin, "account", db.fetch_accounts, r.get("account", "")
+        ))
+
+        # 15 — Код клиента
+        self.table.setCellWidget(row, 15, ComboWidget(
+            isin, "client_code", db.fetch_client_codes, r.get("client_code", "")
+        ))
+
     # ── Обработчики кнопок ───────────────────────────────────────────────────
     def _refresh_combos(self, col: int):
         """Обновляет все ComboWidget в указанной колонке."""
@@ -556,6 +582,30 @@ class MainWindow(QMainWindow):
         )
         dlg.exec_()
         self._refresh_combos(13)     # ← обновляем все комбобоксы Chat ID после закрытия
+
+    def on_accounts_clicked(self):
+        dlg = TelegramListDialog(
+            title="Аккаунты",
+            placeholder="Введите аккаунт",
+            fetch_fn=db.fetch_accounts,
+            insert_fn=db.insert_account,
+            delete_fn=db.delete_account,
+            parent=self,
+        )
+        dlg.exec_()
+        self._refresh_combos(14)
+
+    def on_client_codes_clicked(self):
+        dlg = TelegramListDialog(
+            title="Коды клиентов (Счета)",
+            placeholder="Введите код клиента",
+            fetch_fn=db.fetch_client_codes,
+            insert_fn=db.insert_client_code,
+            delete_fn=db.delete_client_code,
+            parent=self,
+        )
+        dlg.exec_()
+        self._refresh_combos(15)
 
     def on_add_clicked(self):
         dlg = AddInstrumentDialog(self)
