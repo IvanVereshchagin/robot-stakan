@@ -68,6 +68,22 @@ DDL_STATEMENTS = [
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS trades_limit     INT  NOT NULL DEFAULT 0;",
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS trades_curr      INT  NOT NULL DEFAULT 0;",
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS big_bid_alert_qty INT NOT NULL DEFAULT 0;",
+
+    # Telegram: API tokens
+    """
+    CREATE TABLE IF NOT EXISTS tgapi (
+        id    BIGSERIAL PRIMARY KEY,
+        tgapi TEXT NOT NULL UNIQUE
+    );
+    """,
+
+    # Telegram: Chat IDs
+    """
+    CREATE TABLE IF NOT EXISTS tgchat (
+        id     BIGSERIAL PRIMARY KEY,
+        tgchat TEXT NOT NULL UNIQUE
+    );
+    """,
 ]
 
 # Поля, которые пользователь может редактировать
@@ -153,3 +169,48 @@ def delete_instrument(isin: str) -> None:
     con = get_connection()
     with con.cursor() as cur:
         cur.execute("DELETE FROM instruments WHERE isin = %s", (isin,))
+
+# ─── Telegram API ─────────────────────────────────────────────────────────────
+def fetch_tgapi() -> list:
+    con = get_connection()
+    with con.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT tgapi FROM tgapi ORDER BY id")
+        return [r["tgapi"] for r in cur.fetchall()]
+
+def insert_tgapi(value: str) -> bool:
+    """False если уже существует."""
+    con = get_connection()
+    try:
+        with con.cursor() as cur:
+            cur.execute("INSERT INTO tgapi (tgapi) VALUES (%s)", (value.strip(),))
+        return True
+    except psycopg2.errors.UniqueViolation:
+        return False
+
+def delete_tgapi(value: str) -> None:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute("DELETE FROM tgapi WHERE tgapi = %s", (value.strip(),))
+
+
+# ─── Telegram Chat ID ─────────────────────────────────────────────────────────
+def fetch_tgchat() -> list:
+    con = get_connection()
+    with con.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT tgchat FROM tgchat ORDER BY id")
+        return [r["tgchat"] for r in cur.fetchall()]
+
+def insert_tgchat(value: str) -> bool:
+    """False если уже существует."""
+    con = get_connection()
+    try:
+        with con.cursor() as cur:
+            cur.execute("INSERT INTO tgchat (tgchat) VALUES (%s)", (value.strip(),))
+        return True
+    except psycopg2.errors.UniqueViolation:
+        return False
+
+def delete_tgchat(value: str) -> None:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute("DELETE FROM tgchat WHERE tgchat = %s", (value.strip(),))

@@ -6,7 +6,8 @@ from PyQt5.QtWidgets import (
     QToolBar, QPushButton, QTableWidget, QHeaderView,
     QDialog, QFormLayout, QLineEdit, QLabel, QMessageBox,
     QTableWidgetItem, QDialogButtonBox, QInputDialog,
-    QRadioButton, QButtonGroup, QSpinBox, QSizePolicy
+    QRadioButton, QButtonGroup, QSpinBox, QSizePolicy,
+    QListWidget, QListWidgetItem
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray
 from PyQt5.QtGui import QFont, QIcon, QPixmap
@@ -157,6 +158,121 @@ class IntervalWidget(QWidget):
             QMessageBox.critical(None, "Ошибка БД", str(e))
 
 
+
+# ─── Диалог списка Telegram (API / Chat ID) ───────────────────────────────────
+class TelegramListDialog(QDialog):
+    """
+    Универсальный диалог для управления списком строк (tgapi или tgchat).
+    fetch_fn  — функция получения списка из БД
+    insert_fn — функция добавления
+    delete_fn — функция удаления
+    """
+
+    def __init__(self, title: str, placeholder: str,
+                 fetch_fn, insert_fn, delete_fn,
+                 parent=None):
+        super().__init__(parent)
+        self._fetch  = fetch_fn
+        self._insert = insert_fn
+        self._delete = delete_fn
+
+        self.setWindowTitle(title)
+        self.setMinimumWidth(420)
+        self.setMinimumHeight(320)
+        self.setModal(True)
+
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
+        root.setContentsMargins(16, 16, 16, 16)
+
+        # Список
+        self._list = QListWidget()
+        self._list.setStyleSheet("""
+            QListWidget {
+                background: #1e1e1e; color: #dcdcdc;
+                border: 1px solid #444; font-size: 13px;
+            }
+            QListWidget::item:selected { background: #3a6ea8; color: white; }
+        """)
+        root.addWidget(self._list)
+
+        # Строка ввода + кнопка Добавить
+        row = QHBoxLayout()
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText(placeholder)
+        self._edit.setStyleSheet(
+            "QLineEdit { background:#2b2b2b; color:#dcdcdc; "
+            "border:1px solid #555; border-radius:3px; padding:4px 6px; }"
+        )
+        self._edit.returnPressed.connect(self._on_add)
+
+        btn_add = QPushButton("+ Добавить")
+        btn_add.setStyleSheet(
+            "QPushButton { background:#4a9d5e; color:white; border:none; "
+            "border-radius:4px; padding:5px 12px; font-weight:bold; }"
+            "QPushButton:hover { background:#5ab870; }"
+        )
+        btn_add.clicked.connect(self._on_add)
+
+        row.addWidget(self._edit)
+        row.addWidget(btn_add)
+        root.addLayout(row)
+
+        # Кнопка Удалить выбранное
+        btn_del = QPushButton("— Удалить выбранное")
+        btn_del.setStyleSheet(
+            "QPushButton { background:#9d4a4a; color:white; border:none; "
+            "border-radius:4px; padding:5px 12px; font-weight:bold; }"
+            "QPushButton:hover { background:#b85a5a; }"
+        )
+        btn_del.clicked.connect(self._on_delete)
+        root.addWidget(btn_del)
+
+        # Кнопка Закрыть
+        btn_close = QPushButton("Закрыть")
+        btn_close.setStyleSheet(
+            "QPushButton { background:#444; color:#dcdcdc; border:none; "
+            "border-radius:4px; padding:5px 12px; }"
+            "QPushButton:hover { background:#555; }"
+        )
+        btn_close.clicked.connect(self.accept)
+        root.addWidget(btn_close)
+
+        self._refresh()
+
+    def _refresh(self):
+        self._list.clear()
+        for val in self._fetch():
+            self._list.addItem(QListWidgetItem(str(val)))
+
+    def _on_add(self):
+        val = self._edit.text().strip()
+        if not val:
+            QMessageBox.warning(self, "Ошибка", "Поле не может быть пустым.")
+            return
+        ok = self._insert(val)
+        if not ok:
+            QMessageBox.warning(self, "Дубликат", f"«{val}» уже существует.")
+            return
+        self._edit.clear()
+        self._refresh()
+
+    def _on_delete(self):
+        item = self._list.currentItem()
+        if not item:
+            QMessageBox.warning(self, "Ошибка", "Выберите запись для удаления.")
+            return
+        val = item.text()
+        reply = QMessageBox.question(
+            self, "Подтверждение", f"Удалить «{val}»?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._delete(val)
+        self._refresh()
+
+
 # ─── Диалог добавления инструмента ───────────────────────────────────────────
 class AddInstrumentDialog(QDialog):
     def __init__(self, parent=None):
@@ -230,6 +346,10 @@ class MainWindow(QMainWindow):
                                   border-radius:4px; padding:5px 14px; font-weight:bold; }
             QPushButton#btn_del:hover   { background:#b85a5a; }
             QPushButton#btn_del:pressed { background:#803a3a; }
+            QPushButton#btn_tg  { background:#2e6da4; color:white; border:none;
+                                  border-radius:4px; padding:5px 14px; font-weight:bold; }
+            QPushButton#btn_tg:hover   { background:#3a85c8; }
+            QPushButton#btn_tg:pressed { background:#22518a; }
         """)
         self.addToolBar(tb)
 
@@ -240,6 +360,14 @@ class MainWindow(QMainWindow):
         btn_del = QPushButton("— Удалить"); btn_del.setObjectName("btn_del")
         btn_del.clicked.connect(self.on_delete_clicked)
         tb.addWidget(btn_del)
+
+        btn_tgapi = QPushButton("🔑 API Telegram"); btn_tgapi.setObjectName("btn_tg")
+        btn_tgapi.clicked.connect(self.on_tgapi_clicked)
+        tb.addWidget(btn_tgapi)
+
+        btn_tgchat = QPushButton("💬 Chat ID Telegram"); btn_tgchat.setObjectName("btn_tg")
+        btn_tgchat.clicked.connect(self.on_tgchat_clicked)
+        tb.addWidget(btn_tgchat)
 
     # ── Центральный виджет ───────────────────────────────────────────────────
     def _build_central(self):
@@ -323,6 +451,28 @@ class MainWindow(QMainWindow):
         self.table.setCellWidget(row, 11, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty",0)))
 
     # ── Обработчики кнопок ───────────────────────────────────────────────────
+    def on_tgapi_clicked(self):
+        dlg = TelegramListDialog(
+            title="API Telegram",
+            placeholder="Вставьте токен бота (123456:ABC-DEF...)",
+            fetch_fn=db.fetch_tgapi,
+            insert_fn=db.insert_tgapi,
+            delete_fn=db.delete_tgapi,
+            parent=self,
+        )
+        dlg.exec_()
+
+    def on_tgchat_clicked(self):
+        dlg = TelegramListDialog(
+            title="Chat ID Telegram",
+            placeholder="Например: -1001234567890",
+            fetch_fn=db.fetch_tgchat,
+            insert_fn=db.insert_tgchat,
+            delete_fn=db.delete_tgchat,
+            parent=self,
+        )
+        dlg.exec_()
+
     def on_add_clicked(self):
         dlg = AddInstrumentDialog(self)
         if dlg.exec_() != QDialog.Accepted:
