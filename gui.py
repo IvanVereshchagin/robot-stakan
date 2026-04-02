@@ -205,15 +205,16 @@ class ComboWidget(QWidget):
         self.refresh(current)
 
     def refresh(self, current: str = None):
-        """Перезагружает список из БД. Восстанавливает текущий выбор."""
+        """Перезагружает список из БД. Если current не передан — сохраняет текущий выбор."""
+        if current is None:
+            current = self._combo.currentText()   # запоминаем до очистки
         self._combo.blockSignals(True)
         self._combo.clear()
         self._combo.addItem("")          # пустой пункт — «не выбрано»
         for val in self._fetch_fn():
             self._combo.addItem(str(val))
-        if current is not None:
-            idx = self._combo.findText(current)
-            self._combo.setCurrentIndex(idx if idx >= 0 else 0)
+        idx = self._combo.findText(current)
+        self._combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._combo.blockSignals(False)
 
     def _on_changed(self, text: str):
@@ -525,6 +526,13 @@ class MainWindow(QMainWindow):
         ))
 
     # ── Обработчики кнопок ───────────────────────────────────────────────────
+    def _refresh_combos(self, col: int):
+        """Обновляет все ComboWidget в указанной колонке."""
+        for row in range(self.table.rowCount()):
+            w = self.table.cellWidget(row, col)
+            if isinstance(w, ComboWidget):
+                w.refresh()          # без аргумента — сохраняет текущий выбор
+
     def on_tgapi_clicked(self):
         dlg = TelegramListDialog(
             title="API Telegram",
@@ -535,6 +543,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dlg.exec_()
+        self._refresh_combos(12)     # ← обновляем все комбобоксы API после закрытия
 
     def on_tgchat_clicked(self):
         dlg = TelegramListDialog(
@@ -546,6 +555,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dlg.exec_()
+        self._refresh_combos(13)     # ← обновляем все комбобоксы Chat ID после закрытия
 
     def on_add_clicked(self):
         dlg = AddInstrumentDialog(self)
