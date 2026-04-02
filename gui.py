@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QLabel, QMessageBox,
     QTableWidgetItem, QDialogButtonBox, QInputDialog,
     QRadioButton, QButtonGroup, QSpinBox, QSizePolicy,
-    QListWidget, QListWidgetItem
+    QListWidget, QListWidgetItem, QComboBox
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray
 from PyQt5.QtGui import QFont, QIcon, QPixmap
@@ -38,6 +38,8 @@ HEADERS = [
     "Лимит\nсделок",
     "Кол-во\nсделок",
     "Большой бид\n(Алерт)",
+    "API\nTelegram",
+    "Chat ID\nTelegram",
 ]
 
 # Соответствие индекса колонки → поле БД (None = read-only отображение)
@@ -54,6 +56,8 @@ COL_FIELD = {
     9:  "trades_limit",         # Лимит сделок
     10: None,                   # Кол-во сделок (read-only)
     11: "big_bid_alert_qty",    # Большой бид алерт
+    12: "tgapi",               # API Telegram
+    13: "tgchat",              # Chat ID Telegram
 }
 
 
@@ -157,6 +161,66 @@ class IntervalWidget(QWidget):
         except Exception as e:
             QMessageBox.critical(None, "Ошибка БД", str(e))
 
+
+
+
+# ─── Виджет: комбобокс с выбором из БД ───────────────────────────────────────
+class ComboWidget(QWidget):
+    """
+    Выпадающий список значений из таблицы tgapi / tgchat.
+    При выборе сохраняет в поле instruments.tgapi / instruments.tgchat.
+    fetch_fn — функция, возвращающая список строк из соответствующей таблицы.
+    """
+
+    def __init__(self, isin: str, field: str, fetch_fn,
+                 current: str = "", parent=None):
+        super().__init__(parent)
+        self._isin     = isin
+        self._field    = field
+        self._fetch_fn = fetch_fn
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+
+        self._combo = QComboBox()
+        self._combo.setStyleSheet("""
+            QComboBox {
+                background: #2b2b2b;
+                color: #dcdcdc;
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 2px 6px;
+            }
+            QComboBox::drop-down { border: none; }
+            QComboBox QAbstractItemView {
+                background: #2b2b2b;
+                color: #dcdcdc;
+                selection-background-color: #3a6ea8;
+            }
+        """)
+        self._combo.currentTextChanged.connect(self._on_changed)
+        layout.addWidget(self._combo)
+        self.setStyleSheet("background: transparent;")
+
+        self.refresh(current)
+
+    def refresh(self, current: str = None):
+        """Перезагружает список из БД. Восстанавливает текущий выбор."""
+        self._combo.blockSignals(True)
+        self._combo.clear()
+        self._combo.addItem("")          # пустой пункт — «не выбрано»
+        for val in self._fetch_fn():
+            self._combo.addItem(str(val))
+        if current is not None:
+            idx = self._combo.findText(current)
+            self._combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._combo.blockSignals(False)
+
+    def _on_changed(self, text: str):
+        try:
+            db.update_field(self._isin, self._field, text)
+        except Exception as e:
+            QMessageBox.critical(None, "Ошибка БД", str(e))
 
 
 # ─── Диалог списка Telegram (API / Chat ID) ───────────────────────────────────
@@ -449,6 +513,16 @@ class MainWindow(QMainWindow):
 
         # 11 — Большой бид алерт (big_bid_alert_qty)
         self.table.setCellWidget(row, 11, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty",0)))
+
+        # 12 — API Telegram (combobox из таблицы tgapi)
+        self.table.setCellWidget(row, 12, ComboWidget(
+            isin, "tgapi", db.fetch_tgapi, r.get("tgapi", "")
+        ))
+
+        # 13 — Chat ID Telegram (combobox из таблицы tgchat)
+        self.table.setCellWidget(row, 13, ComboWidget(
+            isin, "tgchat", db.fetch_tgchat, r.get("tgchat", "")
+        ))
 
     # ── Обработчики кнопок ───────────────────────────────────────────────────
     def on_tgapi_clicked(self):

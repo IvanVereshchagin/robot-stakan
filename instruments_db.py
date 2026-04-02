@@ -51,7 +51,9 @@ DDL_STATEMENTS = [
         bid_curr         INT     NOT NULL DEFAULT 0,
         trades_limit     INT     NOT NULL DEFAULT 0,
         trades_curr      INT     NOT NULL DEFAULT 0,
-        big_bid_alert_qty INT    NOT NULL DEFAULT 0
+        big_bid_alert_qty INT    NOT NULL DEFAULT 0,
+        tgapi             TEXT   NOT NULL DEFAULT '',
+        tgchat            TEXT   NOT NULL DEFAULT ''
     );
     """,
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_instruments_isin ON instruments (isin);",
@@ -68,6 +70,8 @@ DDL_STATEMENTS = [
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS trades_limit     INT  NOT NULL DEFAULT 0;",
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS trades_curr      INT  NOT NULL DEFAULT 0;",
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS big_bid_alert_qty INT NOT NULL DEFAULT 0;",
+    "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS tgapi TEXT NOT NULL DEFAULT '';",
+    "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS tgchat TEXT NOT NULL DEFAULT '';",
 
     # Telegram: API tokens
     """
@@ -91,6 +95,7 @@ ALLOWED_FIELDS = {
     "condition", "battle_regime", "trade_interval",
     "best_offer_qty", "best_offer", "price_limit",
     "bid_limit", "trades_limit", "big_bid_alert_qty",
+    "tgapi", "tgchat",
 }
 
 
