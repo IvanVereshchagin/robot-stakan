@@ -8,6 +8,10 @@ import psycopg2.extras
 from psycopg2.extras import RealDictCursor
 from QuikPy import QuikPy
 
+import socks          # pip install PySocks
+import socket
+import requests       # pip install requests
+
 # ─── Логирование ─────────────────────────────────────────────────────────────
 LOG_PATH = os.path.join(os.path.dirname(__file__), "robot.log")
 logging.basicConfig(
@@ -29,6 +33,12 @@ DB_CONFIG = {
     "port":     5432,
 }
 
+# ─── Прокси ──────────────────────────────────────────────────────────────────
+PROXY_HOST = "45.130.131.49"
+PROXY_PORT = 8000
+PROXY_USER = "GKfSQH"
+PROXY_PASS = "tppF4H"
+
 # ─── Флаг остановки ──────────────────────────────────────────────────────────
 STOP_FLAG = os.path.join(os.path.dirname(__file__), "stop.flag")
 
@@ -41,6 +51,41 @@ def cleanup_flag():
             os.remove(STOP_FLAG)
     except Exception:
         pass
+
+
+# ─── Telegram ────────────────────────────────────────────────────────────────
+def send_telegram(tgapi: str, chat_id: str, text: str) -> bool:
+    """
+    Отправляет сообщение в Telegram через SOCKS5-прокси.
+    Возвращает True при успехе.
+    """
+    url = f"https://api.telegram.org/bot{tgapi}/sendMessage"
+
+    # Создаём отдельную сессию с прокси — не трогаем глобальный socket
+    session = requests.Session()
+    session.proxies = {
+        "http":  f"socks5://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
+        "https": f"socks5://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
+    }
+
+    try:
+        resp = session.post(
+            url,
+            json={"chat_id": chat_id, "text": text},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            return True
+        else:
+            logger.warning(
+                f"⚠️ TG ответил {resp.status_code}: {resp.text[:120]}"
+            )
+            return False
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка отправки TG ({chat_id}): {e}")
+        return False
+    finally:
+        session.close()
 
 
 # ─── Чтение из БД ────────────────────────────────────────────────────────────
@@ -56,11 +101,26 @@ def fetch_decay(conn) -> float:
     return float(row[0]) if row and row[0] is not None else 1.0
 
 
-# ─── Обработка одной строки ───────────────────────────────────────────────────
+# ─── Обработка одной строки ──────────────────────────────────────────────────
 def process_instrument(row: dict):
-    logger.info(f"── Инструмент: {row['name']} (ISIN: {row['isin']}) ──")
+    name = row.get("name", "—")
+    isin = row.get("isin", "—")
+
+    logger.info(f"── Инструмент: {name} (ISIN: {isin}) ──")
     for key, value in row.items():
         logger.info(f"   {key} = {value}")
+
+    # Отправка TG-уведомления если заданы оба поля
+    tgapi  = (row.get("tgapi")  or "").strip()
+    tgchat = (row.get("tgchat") or "").strip()
+
+    if tgapi and tgchat:
+        msg = f"{isin} | {name}"
+        ok  = send_telegram(tgapi, tgchat, msg)
+        if ok:
+            logger.info(f"📨 TG отправлено → {tgchat}: «{msg}»")
+    else:
+        logger.info(f"   (TG не настроен для {name})")
 
 
 # ─── Основной цикл ───────────────────────────────────────────────────────────
@@ -96,9 +156,9 @@ def robot():
             for row in rows:
                 if should_stop():
                     break
-                process_instrument(row)
+                process_instrument(dict(row))
 
-            logger.info(f"✅ Итерация {iteration} завершена, обработано строк: {len(rows)}")
+            logger.info(f"✅ Итерация {iteration} завершена, строк: {len(rows)}")
 
             # 3. Читаем задержку из БД
             try:
@@ -109,7 +169,7 @@ def robot():
 
             logger.info(f"⏱ Задержка {decay} сек.")
 
-            # 4. Ждём decay секунд, проверяя флаг каждые 0.2с
+            # 4. Ждём decay секунд с проверкой флага каждые 0.2с
             elapsed = 0.0
             while elapsed < decay and not should_stop():
                 time.sleep(0.2)

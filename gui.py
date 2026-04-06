@@ -719,7 +719,7 @@ class MainWindow(QMainWindow):
     def _check_robot(self):
         if self._robot_process is not None and self._robot_process.poll() is not None:
             self._robot_process = None
-        self._load_decay()
+            self._load_decay()
             self._set_lamp(False)
 
     def _set_lamp(self, running: bool):
