@@ -1,6 +1,9 @@
 import sys
 import base64
 import instruments_db as db
+import subprocess
+import os
+import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QToolBar, QPushButton, QTableWidget, QHeaderView,
@@ -9,7 +12,7 @@ from PyQt5.QtWidgets import (
     QRadioButton, QButtonGroup, QSpinBox, QSizePolicy,
     QListWidget, QListWidgetItem, QComboBox
 )
-from PyQt5.QtCore import Qt, QSize, QByteArray
+from PyQt5.QtCore import Qt, QSize, QByteArray, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPixmap
 
 
@@ -400,6 +403,11 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_central()
         self._load_from_db()
+        self._robot_process = None
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(500)
+        self._poll_timer.timeout.connect(self._check_robot)
+        self._poll_timer.start()
 
     # ── Тулбар ───────────────────────────────────────────────────────────────
     def _build_toolbar(self):
@@ -423,6 +431,10 @@ class MainWindow(QMainWindow):
                                   border-radius:4px; padding:5px 14px; font-weight:bold; }
             QPushButton#btn_acc:hover   { background:#a8822e; }
             QPushButton#btn_acc:pressed { background:#6a5020; }
+            QPushButton#btn_robot_off { background:#3a3a3a; color:#aaaaaa; border:1px solid #555; border-radius:4px; padding:5px 14px; font-weight:bold; }
+            QPushButton#btn_robot_off:hover { background:#4a4a4a; color:white; }
+            QPushButton#btn_robot_on  { background:#c0392b; color:white; border:none; border-radius:4px; padding:5px 14px; font-weight:bold; }
+            QPushButton#btn_robot_on:hover  { background:#e74c3c; }
         """)
         self.addToolBar(tb)
 
@@ -449,6 +461,22 @@ class MainWindow(QMainWindow):
         btn_cc = QPushButton("🏷 Счета"); btn_cc.setObjectName("btn_acc")
         btn_cc.clicked.connect(self.on_client_codes_clicked)
         tb.addWidget(btn_cc)
+
+        sep = QWidget(); sep.setFixedWidth(16)
+        sep.setStyleSheet("background: transparent;")
+        tb.addWidget(sep)
+
+        self._lamp = QLabel("\u25cf")
+        self._lamp.setFixedWidth(22)
+        self._lamp.setAlignment(Qt.AlignCenter)
+        self._lamp.setStyleSheet("color: #555555; font-size: 18px;")
+        self._lamp.setToolTip("\u0420\u043e\u0431\u043e\u0442 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d")
+        tb.addWidget(self._lamp)
+
+        self._btn_robot = QPushButton("\u25b6 \u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0440\u043e\u0431\u043e\u0442\u0430")
+        self._btn_robot.setObjectName("btn_robot_off")
+        self._btn_robot.clicked.connect(self.on_robot_clicked)
+        tb.addWidget(self._btn_robot)
 
     # ── Центральный виджет ───────────────────────────────────────────────────
     def _build_central(self):
@@ -583,6 +611,56 @@ class MainWindow(QMainWindow):
         dlg.exec_()
         self._refresh_combos(13)     # ← обновляем все комбобоксы Chat ID после закрытия
 
+    def on_robot_clicked(self):
+        if self._robot_process is None or self._robot_process.poll() is not None:
+            self._start_robot()
+        else:
+            self._stop_robot()
+
+    def _start_robot(self):
+        flag = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stop.flag")
+        if os.path.exists(flag):
+            os.remove(flag)
+        robot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robot.py")
+        kwargs = {}
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        self._robot_process = subprocess.Popen([sys.executable, robot_path], **kwargs)
+        self._set_lamp(True)
+
+    def _stop_robot(self):
+        flag = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stop.flag")
+        with open(flag, "w") as f:
+            f.write("stop")
+        self._set_lamp(False)
+
+    def _check_robot(self):
+        if self._robot_process is not None and self._robot_process.poll() is not None:
+            self._robot_process = None
+            self._set_lamp(False)
+
+    def _set_lamp(self, running: bool):
+        if running:
+            self._lamp.setStyleSheet("color: #2ecc71; font-size: 18px;")
+            self._lamp.setToolTip("\u0420\u043e\u0431\u043e\u0442 \u0437\u0430\u043f\u0443\u0449\u0435\u043d")
+            self._btn_robot.setText("\u23f9 \u041e\u0441\u0442\u0430\u043d\u043e\u0432\u0438\u0442\u044c \u0440\u043e\u0431\u043e\u0442\u0430")
+            self._btn_robot.setObjectName("btn_robot_on")
+        else:
+            self._lamp.setStyleSheet("color: #555555; font-size: 18px;")
+            self._lamp.setToolTip("\u0420\u043e\u0431\u043e\u0442 \u043e\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d")
+            self._btn_robot.setText("\u25b6 \u0417\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u0440\u043e\u0431\u043e\u0442\u0430")
+            self._btn_robot.setObjectName("btn_robot_off")
+        self._btn_robot.style().unpolish(self._btn_robot)
+        self._btn_robot.style().polish(self._btn_robot)
+
+    def closeEvent(self, event):
+        self._poll_timer.stop()
+        self._stop_robot()
+        import time as _t; _t.sleep(0.4)
+        if self._robot_process and self._robot_process.poll() is None:
+            self._robot_process.terminate()
+        super().closeEvent(event)
+
     def on_accounts_clicked(self):
         dlg = TelegramListDialog(
             title="Аккаунты",
@@ -618,7 +696,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Ошибка БД", str(e))
             return
         if not ok:
-            QMessageBox.warning(self, "Дубликат", f"ISIN «{isin}» уже существует.")
+            QMessageBox.warning(self, "Дубликат", f"Инструмент «{name}» с ISIN «{isin}» уже существует.")
             return
         # Загружаем свежую запись из БД чтобы получить дефолты
         rows = db.fetch_all_instruments()
