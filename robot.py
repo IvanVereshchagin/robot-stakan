@@ -64,15 +64,15 @@ def send_telegram(tgapi: str, chat_id: str, text: str) -> bool:
     # Создаём отдельную сессию с прокси — не трогаем глобальный socket
     session = requests.Session()
     session.proxies = {
-        "http":  f"socks5://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
-        "https": f"socks5://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
+        "http":  f"socks5h://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
+        "https": f"socks5h://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
     }
 
     try:
         resp = session.post(
             url,
             json={"chat_id": chat_id, "text": text},
-            timeout=10
+            timeout=30
         )
         if resp.status_code == 200:
             return True
