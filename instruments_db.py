@@ -58,7 +58,8 @@ DDL_STATEMENTS = [
         client_code       TEXT   NOT NULL DEFAULT ''
     );
     """,
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_instruments_isin ON instruments (isin);",
+    "DROP INDEX IF EXISTS uq_instruments_isin;",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_instruments_isin_name ON instruments (isin, name);",
 
     # ALTER TABLE — добавляем колонки если таблица уже существовала без них
     "ALTER TABLE instruments ADD COLUMN IF NOT EXISTS condition        TEXT NOT NULL DEFAULT 'OFF';",
@@ -91,6 +92,19 @@ DDL_STATEMENTS = [
         id          BIGSERIAL PRIMARY KEY,
         client_code TEXT NOT NULL UNIQUE
     );
+    """,
+
+    # Задержка цикла робота
+    """
+    CREATE TABLE IF NOT EXISTS decay (
+        id    INT PRIMARY KEY,
+        decay NUMERIC NOT NULL DEFAULT 1.0
+    );
+    """,
+    """
+    INSERT INTO decay (id, decay)
+    SELECT 1, 1.0
+    WHERE NOT EXISTS (SELECT 1 FROM decay WHERE id = 1);
     """,
 
     # Telegram: API tokens
@@ -156,7 +170,7 @@ def init_db():
 
 # ─── CRUD ─────────────────────────────────────────────────────────────────────
 def insert_instrument(name: str, isin: str, board: str) -> bool:
-    """Возвращает False если ISIN уже есть."""
+    """Возвращает False если пара (isin, name) уже существует."""
     con = get_connection()
     try:
         with con.cursor() as cur:
@@ -282,3 +296,20 @@ def delete_client_code(value: str) -> None:
     con = get_connection()
     with con.cursor() as cur:
         cur.execute("DELETE FROM client_codes WHERE client_code = %s", (value.strip(),))
+
+# ─── Decay (задержка цикла) ───────────────────────────────────────────────────
+def fetch_decay() -> float:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute("SELECT decay FROM decay WHERE id = 1")
+        row = cur.fetchone()
+    return float(row[0]) if row and row[0] is not None else 1.0
+
+def update_decay(value: float) -> None:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute(
+            "INSERT INTO decay (id, decay) VALUES (1, %s) "
+            "ON CONFLICT (id) DO UPDATE SET decay = EXCLUDED.decay",
+            (value,)
+        )

@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QDialogButtonBox, QInputDialog,
     QRadioButton, QButtonGroup, QSpinBox, QSizePolicy,
     QListWidget, QListWidgetItem, QComboBox,
-    QSplitter, QTextEdit
+    QSplitter, QTextEdit, QDoubleSpinBox
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPixmap
@@ -405,6 +405,7 @@ class MainWindow(QMainWindow):
         self._build_central()
         self._load_from_db()
         self._robot_process = None
+        self._load_decay()
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
         self._poll_timer.timeout.connect(self._check_robot)
@@ -462,6 +463,24 @@ class MainWindow(QMainWindow):
         btn_cc = QPushButton("🏷 Счета"); btn_cc.setObjectName("btn_acc")
         btn_cc.clicked.connect(self.on_client_codes_clicked)
         tb.addWidget(btn_cc)
+
+        lbl_decay = QLabel("  Задержка (сек):")
+        lbl_decay.setStyleSheet("color: #aaaaaa; font-size: 12px;")
+        tb.addWidget(lbl_decay)
+
+        self._spin_decay = QDoubleSpinBox()
+        self._spin_decay.setRange(0.0, 60.0)
+        self._spin_decay.setSingleStep(0.5)
+        self._spin_decay.setDecimals(1)
+        self._spin_decay.setValue(1.0)
+        self._spin_decay.setFixedWidth(70)
+        self._spin_decay.setStyleSheet(
+            "QDoubleSpinBox { background:#2b2b2b; color:#dcdcdc; border:1px solid #555;"
+            " border-radius:3px; padding:3px 6px; font-size:12px; }"
+            "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width:0px; }"
+        )
+        self._spin_decay.editingFinished.connect(self._on_decay_changed)
+        tb.addWidget(self._spin_decay)
 
         sep = QWidget(); sep.setFixedWidth(16)
         sep.setStyleSheet("background: transparent;")
@@ -700,6 +719,7 @@ class MainWindow(QMainWindow):
     def _check_robot(self):
         if self._robot_process is not None and self._robot_process.poll() is not None:
             self._robot_process = None
+        self._load_decay()
             self._set_lamp(False)
 
     def _set_lamp(self, running: bool):
@@ -715,6 +735,22 @@ class MainWindow(QMainWindow):
             self._btn_robot.setObjectName("btn_robot_off")
         self._btn_robot.style().unpolish(self._btn_robot)
         self._btn_robot.style().polish(self._btn_robot)
+
+    def _load_decay(self):
+        try:
+            val = db.fetch_decay()
+            self._spin_decay.blockSignals(True)
+            self._spin_decay.setValue(val)
+            self._spin_decay.blockSignals(False)
+        except Exception:
+            pass
+
+    def _on_decay_changed(self):
+        val = self._spin_decay.value()
+        try:
+            db.update_decay(val)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить задержку:\n{e}")
 
     def _read_log(self):
         log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robot.log")
