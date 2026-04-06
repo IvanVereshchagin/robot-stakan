@@ -10,7 +10,8 @@ from PyQt5.QtWidgets import (
     QDialog, QFormLayout, QLineEdit, QLabel, QMessageBox,
     QTableWidgetItem, QDialogButtonBox, QInputDialog,
     QRadioButton, QButtonGroup, QSpinBox, QSizePolicy,
-    QListWidget, QListWidgetItem, QComboBox
+    QListWidget, QListWidgetItem, QComboBox,
+    QSplitter, QTextEdit
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPixmap
@@ -482,8 +483,19 @@ class MainWindow(QMainWindow):
     def _build_central(self):
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(8, 8, 8, 8)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(0)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(6)
+        splitter.setStyleSheet("QSplitter::handle { background: #3a3a3a; }")
+        root.addWidget(splitter)
+
+        # ── Левая часть: таблица инструментов ────────────────────────────────
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
 
         self.table = QTableWidget(0, len(HEADERS))
         self.table.setHorizontalHeaderLabels(HEADERS)
@@ -501,7 +513,56 @@ class MainWindow(QMainWindow):
             QTableWidget::item:selected { background:#3a6ea8; color:white; }
             QTableWidget { alternate-background-color:#252525; }
         """)
-        layout.addWidget(self.table)
+        left_layout.addWidget(self.table)
+        splitter.addWidget(left)
+
+        # ── Правая часть: панель логов ────────────────────────────────────────
+        right = QWidget()
+        right.setMinimumWidth(260)
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(6, 0, 0, 0)
+        right_layout.setSpacing(4)
+
+        log_header = QLabel("📋 Логи робота")
+        log_header.setStyleSheet(
+            "color:#aaaaaa; font-size:11px; font-weight:bold; padding:2px 0;"
+        )
+        right_layout.addWidget(log_header)
+
+        self._log_view = QTextEdit()
+        self._log_view.setReadOnly(True)
+        self._log_view.setStyleSheet("""
+            QTextEdit {
+                background: #141414;
+                color: #b0b0b0;
+                border: 1px solid #333;
+                border-radius: 3px;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+                padding: 4px;
+            }
+        """)
+        right_layout.addWidget(self._log_view)
+
+        btn_clear = QPushButton("Очистить")
+        btn_clear.setStyleSheet(
+            "QPushButton { background:#2b2b2b; color:#888; border:1px solid #444;"
+            " border-radius:3px; padding:3px 8px; font-size:11px; }"
+            "QPushButton:hover { color:#dcdcdc; }"
+        )
+        btn_clear.clicked.connect(self._log_view.clear)
+        right_layout.addWidget(btn_clear)
+
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 4)   # таблица — 4 части
+        splitter.setStretchFactor(1, 1)   # логи — 1 часть
+
+        # ── Таймер чтения лога ───────────────────────────────────────────────
+        self._log_pos  = 0        # позиция чтения в файле
+        self._log_timer = QTimer(self)
+        self._log_timer.setInterval(500)
+        self._log_timer.timeout.connect(self._read_log)
+        self._log_timer.start()
 
     # ── Загрузка из БД ───────────────────────────────────────────────────────
     def _load_from_db(self):
@@ -626,6 +687,8 @@ class MainWindow(QMainWindow):
         if hasattr(subprocess, "CREATE_NO_WINDOW"):
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         self._robot_process = subprocess.Popen([sys.executable, robot_path], **kwargs)
+        self._log_pos = 0
+        self._log_view.clear()
         self._set_lamp(True)
 
     def _stop_robot(self):
@@ -653,8 +716,41 @@ class MainWindow(QMainWindow):
         self._btn_robot.style().unpolish(self._btn_robot)
         self._btn_robot.style().polish(self._btn_robot)
 
+    def _read_log(self):
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robot.log")
+        if not os.path.exists(log_path):
+            return
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(self._log_pos)
+                new_text = f.read()
+                self._log_pos = f.tell()
+            if new_text:
+                # Подсветка уровней цветом через HTML
+                for line in new_text.splitlines():
+                    if "[ERROR]" in line or "❌" in line:
+                        color = "#e74c3c"
+                    elif "[WARNING]" in line or "⚠️" in line:
+                        color = "#e67e22"
+                    elif "✅" in line or "🔒" in line or "📨" in line:
+                        color = "#2ecc71"
+                    elif "===" in line:
+                        color = "#3498db"
+                    else:
+                        color = "#b0b0b0"
+                    escaped = line.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+                    self._log_view.append(
+                        f'<span style="color:{color};">{escaped}</span>'
+                    )
+                # Прокрутка вниз
+                sb = self._log_view.verticalScrollBar()
+                sb.setValue(sb.maximum())
+        except Exception:
+            pass
+
     def closeEvent(self, event):
         self._poll_timer.stop()
+        self._log_timer.stop()
         self._stop_robot()
         import time as _t; _t.sleep(0.4)
         if self._robot_process and self._robot_process.poll() is None:
