@@ -33,11 +33,6 @@ DB_CONFIG = {
     "port":     5432,
 }
 
-# ─── Прокси ──────────────────────────────────────────────────────────────────
-PROXY_HOST = "45.130.131.49"
-PROXY_PORT = 8000
-PROXY_USER = "GKfSQH"
-PROXY_PASS = "tppF4H"
 
 # ─── Флаг остановки ──────────────────────────────────────────────────────────
 STOP_FLAG = os.path.join(os.path.dirname(__file__), "stop.flag")
@@ -54,19 +49,24 @@ def cleanup_flag():
 
 
 # ─── Telegram ────────────────────────────────────────────────────────────────
-def send_telegram(tgapi: str, chat_id: str, text: str) -> bool:
+def send_telegram(tgapi: str, chat_id: str, text: str, proxy: dict | None) -> bool:
     """
-    Отправляет сообщение в Telegram через SOCKS5-прокси.
-    Возвращает True при успехе.
+    Отправляет сообщение в Telegram.
+    proxy — словарь с ключами host, port, username, password (или None).
     """
     url = f"https://api.telegram.org/bot{tgapi}/sendMessage"
 
-    # Создаём отдельную сессию с прокси — не трогаем глобальный socket
     session = requests.Session()
-    session.proxies = {
-        "http":  f"socks5h://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
-        "https": f"socks5h://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}",
-    }
+
+    if proxy:
+        user = proxy.get("username", "")
+        pwd  = proxy.get("password", "")
+        host = proxy["host"]
+        port = proxy["port"]
+        auth = f"{user}:{pwd}@" if user else ""
+        proxy_url = f"socks5h://{auth}{host}:{port}"
+        session.proxies = {"http": proxy_url, "https": proxy_url}
+        logger.debug(f"   Прокси: {host}:{port}")
 
     try:
         resp = session.post(
@@ -77,9 +77,7 @@ def send_telegram(tgapi: str, chat_id: str, text: str) -> bool:
         if resp.status_code == 200:
             return True
         else:
-            logger.warning(
-                f"⚠️ TG ответил {resp.status_code}: {resp.text[:120]}"
-            )
+            logger.warning(f"⚠️ TG ответил {resp.status_code}: {resp.text[:120]}")
             return False
     except Exception as e:
         logger.warning(f"⚠️ Ошибка отправки TG ({chat_id}): {e}")
@@ -89,6 +87,13 @@ def send_telegram(tgapi: str, chat_id: str, text: str) -> bool:
 
 
 # ─── Чтение из БД ────────────────────────────────────────────────────────────
+def fetch_active_proxy(conn) -> dict | None:
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM proxies WHERE is_active = TRUE LIMIT 1")
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
 def fetch_instruments(conn) -> list:
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM instruments ORDER BY name")
@@ -102,7 +107,7 @@ def fetch_decay(conn) -> float:
 
 
 # ─── Обработка одной строки ──────────────────────────────────────────────────
-def process_instrument(row: dict):
+def process_instrument(row: dict, proxy: dict | None):
     name = row.get("name", "—")
     isin = row.get("isin", "—")
 
@@ -116,7 +121,7 @@ def process_instrument(row: dict):
 
     if tgapi and tgchat:
         msg = f"{isin} | {name}"
-        ok  = send_telegram(tgapi, tgchat, msg)
+        ok  = send_telegram(tgapi, tgchat, msg, proxy)
         if ok:
             logger.info(f"📨 TG отправлено → {tgchat}: «{msg}»")
     else:
@@ -139,6 +144,17 @@ def robot():
         conn.autocommit = True
         logger.info("✅ Подключение к БД установлено")
 
+        # Читаем прокси один раз при старте
+        try:
+            proxy = fetch_active_proxy(conn)
+            if proxy:
+                logger.info(f"🌐 Прокси: {proxy['host']}:{proxy['port']}")
+            else:
+                logger.info("🌐 Прокси не выбран — отправка напрямую")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось прочитать прокси: {e}")
+            proxy = None
+
         iteration = 0
 
         while not should_stop():
@@ -156,7 +172,7 @@ def robot():
             for row in rows:
                 if should_stop():
                     break
-                process_instrument(dict(row))
+                process_instrument(dict(row), proxy)
 
             logger.info(f"✅ Итерация {iteration} завершена, строк: {len(rows)}")
 

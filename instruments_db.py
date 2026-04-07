@@ -107,6 +107,18 @@ DDL_STATEMENTS = [
     WHERE NOT EXISTS (SELECT 1 FROM decay WHERE id = 1);
     """,
 
+    # Прокси
+    """
+    CREATE TABLE IF NOT EXISTS proxies (
+        id       BIGSERIAL PRIMARY KEY,
+        host     TEXT NOT NULL,
+        port     INT  NOT NULL,
+        username TEXT NOT NULL DEFAULT '',
+        password TEXT NOT NULL DEFAULT '',
+        is_active BOOLEAN NOT NULL DEFAULT FALSE
+    );
+    """,
+
     # Telegram: API tokens
     """
     CREATE TABLE IF NOT EXISTS tgapi (
@@ -313,3 +325,44 @@ def update_decay(value: float) -> None:
             "ON CONFLICT (id) DO UPDATE SET decay = EXCLUDED.decay",
             (value,)
         )
+
+# ─── Proxies ──────────────────────────────────────────────────────────────────
+def fetch_proxies() -> list:
+    con = get_connection()
+    with con.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM proxies ORDER BY id")
+        return cur.fetchall()
+
+def fetch_active_proxy() -> dict | None:
+    """Возвращает активный прокси или None."""
+    con = get_connection()
+    with con.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("SELECT * FROM proxies WHERE is_active = TRUE LIMIT 1")
+        return cur.fetchone()
+
+def insert_proxy(host: str, port: int, username: str = "", password: str = "") -> int:
+    """Добавляет прокси, возвращает его id."""
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute(
+            "INSERT INTO proxies (host, port, username, password) "
+            "VALUES (%s, %s, %s, %s) RETURNING id",
+            (host.strip(), port, username.strip(), password.strip())
+        )
+        return cur.fetchone()[0]
+
+def delete_proxy(proxy_id: int) -> None:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute("DELETE FROM proxies WHERE id = %s", (proxy_id,))
+
+def set_active_proxy(proxy_id: int | None) -> None:
+    """Снимает активность со всех, ставит на proxy_id (None = никакой)."""
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute("UPDATE proxies SET is_active = FALSE")
+        if proxy_id is not None:
+            cur.execute(
+                "UPDATE proxies SET is_active = TRUE WHERE id = %s",
+                (proxy_id,)
+            )

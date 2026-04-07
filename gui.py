@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QDialogButtonBox, QInputDialog,
     QRadioButton, QButtonGroup, QSpinBox, QSizePolicy,
     QListWidget, QListWidgetItem, QComboBox,
-    QSplitter, QTextEdit, QDoubleSpinBox
+    QSplitter, QTextEdit, QDoubleSpinBox, QSpinBox
 )
 from PyQt5.QtCore import Qt, QSize, QByteArray, QTimer
 from PyQt5.QtGui import QFont, QIcon, QPixmap
@@ -346,6 +346,159 @@ class TelegramListDialog(QDialog):
         self._refresh()
 
 
+
+# ─── Диалог управления прокси ────────────────────────────────────────────────
+class ProxyDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Прокси")
+        self.setMinimumWidth(480)
+        self.setMinimumHeight(380)
+        self.setModal(True)
+
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
+        root.setContentsMargins(16, 16, 16, 16)
+
+        # Список прокси
+        self._list = QListWidget()
+        self._list.setStyleSheet("""
+            QListWidget {
+                background: #1e1e1e; color: #dcdcdc;
+                border: 1px solid #444; font-size: 12px;
+                font-family: Consolas, monospace;
+            }
+            QListWidget::item:selected { background: #3a6ea8; color: white; }
+            QListWidget::item { padding: 4px; }
+        """)
+        self._list.itemClicked.connect(self._on_select)
+        root.addWidget(self._list)
+
+        # Форма добавления
+        form_box = QWidget()
+        form_box.setStyleSheet("background: #252525; border-radius: 4px;")
+        form = QFormLayout(form_box)
+        form.setContentsMargins(10, 8, 10, 8)
+        form.setSpacing(6)
+
+        self._ed_host = QLineEdit(); self._ed_host.setPlaceholderText("45.130.131.49")
+        self._ed_port = QSpinBox()
+        self._ed_port.setRange(1, 65535); self._ed_port.setValue(8000)
+        self._ed_user = QLineEdit(); self._ed_user.setPlaceholderText("username (необязательно)")
+        self._ed_pass = QLineEdit(); self._ed_pass.setPlaceholderText("password (необязательно)")
+        self._ed_pass.setEchoMode(QLineEdit.Password)
+
+        field_style = ("QLineEdit,QSpinBox { background:#2b2b2b; color:#dcdcdc; "
+                       "border:1px solid #555; border-radius:3px; padding:4px 6px; }")
+        for w in (self._ed_host, self._ed_port, self._ed_user, self._ed_pass):
+            w.setStyleSheet(field_style)
+
+        form.addRow("Host:", self._ed_host)
+        form.addRow("Port:", self._ed_port)
+        form.addRow("User:", self._ed_user)
+        form.addRow("Pass:", self._ed_pass)
+        root.addWidget(form_box)
+
+        # Кнопки
+        btn_row = QHBoxLayout()
+
+        btn_add = QPushButton("+ Добавить")
+        btn_add.setStyleSheet(
+            "QPushButton{background:#4a9d5e;color:white;border:none;"
+            "border-radius:4px;padding:5px 12px;font-weight:bold;}"
+            "QPushButton:hover{background:#5ab870;}"
+        )
+        btn_add.clicked.connect(self._on_add)
+
+        btn_del = QPushButton("— Удалить")
+        btn_del.setStyleSheet(
+            "QPushButton{background:#9d4a4a;color:white;border:none;"
+            "border-radius:4px;padding:5px 12px;font-weight:bold;}"
+            "QPushButton:hover{background:#b85a5a;}"
+        )
+        btn_del.clicked.connect(self._on_delete)
+
+        self._btn_activate = QPushButton("✔ Применить выбранный")
+        self._btn_activate.setStyleSheet(
+            "QPushButton{background:#2e6da4;color:white;border:none;"
+            "border-radius:4px;padding:5px 12px;font-weight:bold;}"
+            "QPushButton:hover{background:#3a85c8;}"
+        )
+        self._btn_activate.clicked.connect(self._on_activate)
+
+        btn_close = QPushButton("Закрыть")
+        btn_close.setStyleSheet(
+            "QPushButton{background:#444;color:#dcdcdc;border:none;"
+            "border-radius:4px;padding:5px 12px;}"
+            "QPushButton:hover{background:#555;}"
+        )
+        btn_close.clicked.connect(self.accept)
+
+        btn_row.addWidget(btn_add)
+        btn_row.addWidget(btn_del)
+        btn_row.addWidget(self._btn_activate)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_close)
+        root.addLayout(btn_row)
+
+        self._proxy_ids = []   # id каждой строки в списке
+        self._refresh()
+
+    def _refresh(self):
+        self._list.clear()
+        self._proxy_ids = []
+        proxies = db.fetch_proxies()
+        for p in proxies:
+            active = " ✔ АКТИВЕН" if p["is_active"] else ""
+            user_part = f"  [{p['username']}]" if p["username"] else ""
+            label = f"{p['host']}:{p['port']}{user_part}{active}"
+            item = QListWidgetItem(label)
+            if p["is_active"]:
+                item.setForeground(__import__("PyQt5.QtGui", fromlist=["QColor"]).QColor("#2ecc71"))
+            self._list.addItem(item)
+            self._proxy_ids.append(p["id"])
+
+    def _selected_id(self):
+        idx = self._list.currentRow()
+        if idx < 0 or idx >= len(self._proxy_ids):
+            return None
+        return self._proxy_ids[idx]
+
+    def _on_select(self):
+        pass  # просто выделяем
+
+    def _on_add(self):
+        host = self._ed_host.text().strip()
+        port = self._ed_port.value()
+        if not host:
+            QMessageBox.warning(self, "Ошибка", "Введите host прокси.")
+            return
+        db.insert_proxy(host, port, self._ed_user.text(), self._ed_pass.text())
+        self._ed_host.clear(); self._ed_user.clear(); self._ed_pass.clear()
+        self._refresh()
+
+    def _on_delete(self):
+        pid = self._selected_id()
+        if pid is None:
+            QMessageBox.warning(self, "Ошибка", "Выберите прокси для удаления.")
+            return
+        reply = QMessageBox.question(self, "Удалить?", "Удалить выбранный прокси?",
+                                     QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            db.delete_proxy(pid)
+            self._refresh()
+
+    def _on_activate(self):
+        pid = self._selected_id()
+        if pid is None:
+            QMessageBox.warning(self, "Ошибка", "Выберите прокси.")
+            return
+        db.set_active_proxy(pid)
+        self._refresh()
+        QMessageBox.information(self, "Готово",
+            "Прокси применён.\nВступит в силу при следующем запуске робота.")
+
+
 # ─── Диалог добавления инструмента ───────────────────────────────────────────
 class AddInstrumentDialog(QDialog):
     def __init__(self, parent=None):
@@ -433,6 +586,10 @@ class MainWindow(QMainWindow):
                                   border-radius:4px; padding:5px 14px; font-weight:bold; }
             QPushButton#btn_acc:hover   { background:#a8822e; }
             QPushButton#btn_acc:pressed { background:#6a5020; }
+            QPushButton#btn_proxy { background:#1a5276; color:white; border:none;
+                                    border-radius:4px; padding:5px 14px; font-weight:bold; }
+            QPushButton#btn_proxy:hover   { background:#2471a3; }
+            QPushButton#btn_proxy:pressed { background:#154360; }
             QPushButton#btn_robot_off { background:#3a3a3a; color:#aaaaaa; border:1px solid #555; border-radius:4px; padding:5px 14px; font-weight:bold; }
             QPushButton#btn_robot_off:hover { background:#4a4a4a; color:white; }
             QPushButton#btn_robot_on  { background:#c0392b; color:white; border:none; border-radius:4px; padding:5px 14px; font-weight:bold; }
@@ -463,6 +620,10 @@ class MainWindow(QMainWindow):
         btn_cc = QPushButton("🏷 Счета"); btn_cc.setObjectName("btn_acc")
         btn_cc.clicked.connect(self.on_client_codes_clicked)
         tb.addWidget(btn_cc)
+
+        btn_proxy = QPushButton("🌐 Прокси"); btn_proxy.setObjectName("btn_proxy")
+        btn_proxy.clicked.connect(self.on_proxy_clicked)
+        tb.addWidget(btn_proxy)
 
         lbl_decay = QLabel("  Задержка (сек):")
         lbl_decay.setStyleSheet("color: #aaaaaa; font-size: 12px;")
@@ -719,7 +880,7 @@ class MainWindow(QMainWindow):
     def _check_robot(self):
         if self._robot_process is not None and self._robot_process.poll() is not None:
             self._robot_process = None
-            self._load_decay()
+        self._load_decay()
             self._set_lamp(False)
 
     def _set_lamp(self, running: bool):
@@ -792,6 +953,10 @@ class MainWindow(QMainWindow):
         if self._robot_process and self._robot_process.poll() is None:
             self._robot_process.terminate()
         super().closeEvent(event)
+
+    def on_proxy_clicked(self):
+        dlg = ProxyDialog(self)
+        dlg.exec_()
 
     def on_accounts_clicked(self):
         dlg = TelegramListDialog(
