@@ -94,6 +94,19 @@ DDL_STATEMENTS = [
     );
     """,
 
+    # Признак отправки TG
+    """
+    CREATE TABLE IF NOT EXISTS tg_settings (
+        id         INT PRIMARY KEY,
+        tg_enabled BOOLEAN NOT NULL DEFAULT FALSE
+    );
+    """,
+    """
+    INSERT INTO tg_settings (id, tg_enabled)
+    SELECT 1, FALSE
+    WHERE NOT EXISTS (SELECT 1 FROM tg_settings WHERE id = 1);
+    """,
+
     # Задержка цикла робота
     """
     CREATE TABLE IF NOT EXISTS decay (
@@ -366,3 +379,20 @@ def set_active_proxy(proxy_id: int | None) -> None:
                 "UPDATE proxies SET is_active = TRUE WHERE id = %s",
                 (proxy_id,)
             )
+
+# ─── TG enabled flag ──────────────────────────────────────────────────────────
+def fetch_tg_enabled() -> bool:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute("SELECT tg_enabled FROM tg_settings WHERE id = 1")
+        row = cur.fetchone()
+    return bool(row[0]) if row else False
+
+def update_tg_enabled(value: bool) -> None:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute(
+            "INSERT INTO tg_settings (id, tg_enabled) VALUES (1, %s) "
+            "ON CONFLICT (id) DO UPDATE SET tg_enabled = EXCLUDED.tg_enabled",
+            (value,)
+        )

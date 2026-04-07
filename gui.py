@@ -559,6 +559,7 @@ class MainWindow(QMainWindow):
         self._load_from_db()
         self._robot_process = None
         self._load_decay()
+        self._load_tg_enabled()
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(500)
         self._poll_timer.timeout.connect(self._check_robot)
@@ -624,6 +625,23 @@ class MainWindow(QMainWindow):
         btn_proxy = QPushButton("🌐 Прокси"); btn_proxy.setObjectName("btn_proxy")
         btn_proxy.clicked.connect(self.on_proxy_clicked)
         tb.addWidget(btn_proxy)
+
+        # Отправка ТГ вкл/выкл
+        lbl_tg = QLabel("  Отправка ТГ:")
+        lbl_tg.setStyleSheet("color: #aaaaaa; font-size: 12px;")
+        tb.addWidget(lbl_tg)
+
+        self._grp_tg = QButtonGroup(self)
+        self._rb_tg_yes = QRadioButton("Да")
+        self._rb_tg_no  = QRadioButton("Нет")
+        for rb in (self._rb_tg_yes, self._rb_tg_no):
+            rb.setStyleSheet("QRadioButton { color: #dcdcdc; font-size: 12px; }")
+        self._grp_tg.addButton(self._rb_tg_yes, 1)
+        self._grp_tg.addButton(self._rb_tg_no,  0)
+        self._rb_tg_no.setChecked(True)
+        self._grp_tg.buttonClicked.connect(self._on_tg_enabled_changed)
+        tb.addWidget(self._rb_tg_yes)
+        tb.addWidget(self._rb_tg_no)
 
         lbl_decay = QLabel("  Задержка (сек):")
         lbl_decay.setStyleSheet("color: #aaaaaa; font-size: 12px;")
@@ -880,7 +898,8 @@ class MainWindow(QMainWindow):
     def _check_robot(self):
         if self._robot_process is not None and self._robot_process.poll() is not None:
             self._robot_process = None
-        self._load_decay()
+            self._load_decay()
+            self._load_tg_enabled()
             self._set_lamp(False)
 
     def _set_lamp(self, running: bool):
@@ -912,6 +931,25 @@ class MainWindow(QMainWindow):
             db.update_decay(val)
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить задержку:\n{e}")
+
+    def _load_tg_enabled(self):
+        try:
+            val = db.fetch_tg_enabled()
+            self._grp_tg.blockSignals(True)
+            if val:
+                self._rb_tg_yes.setChecked(True)
+            else:
+                self._rb_tg_no.setChecked(True)
+            self._grp_tg.blockSignals(False)
+        except Exception:
+            pass
+
+    def _on_tg_enabled_changed(self):
+        val = self._rb_tg_yes.isChecked()
+        try:
+            db.update_tg_enabled(val)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить:\n{e}")
 
     def _read_log(self):
         log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robot.log")

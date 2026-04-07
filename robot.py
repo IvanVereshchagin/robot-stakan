@@ -94,6 +94,13 @@ def fetch_active_proxy(conn) -> dict | None:
     return dict(row) if row else None
 
 
+def fetch_tg_enabled(conn) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT tg_enabled FROM tg_settings WHERE id = 1")
+        row = cur.fetchone()
+    return bool(row[0]) if row else False
+
+
 def fetch_instruments(conn) -> list:
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM instruments ORDER BY name")
@@ -107,7 +114,7 @@ def fetch_decay(conn) -> float:
 
 
 # ─── Обработка одной строки ──────────────────────────────────────────────────
-def process_instrument(row: dict, proxy: dict | None):
+def process_instrument(row: dict, proxy: dict | None, tg_enabled: bool = False):
     name = row.get("name", "—")
     isin = row.get("isin", "—")
 
@@ -119,11 +126,13 @@ def process_instrument(row: dict, proxy: dict | None):
     tgapi  = (row.get("tgapi")  or "").strip()
     tgchat = (row.get("tgchat") or "").strip()
 
-    if tgapi and tgchat:
+    if tg_enabled and tgapi and tgchat:
         msg = f"{isin} | {name}"
         ok  = send_telegram(tgapi, tgchat, msg, proxy)
         if ok:
             logger.info(f"📨 TG отправлено → {tgchat}: «{msg}»")
+    elif not tg_enabled:
+        logger.info(f"   (TG отключён глобально)")
     else:
         logger.info(f"   (TG не настроен для {name})")
 
@@ -155,6 +164,14 @@ def robot():
             logger.warning(f"⚠️ Не удалось прочитать прокси: {e}")
             proxy = None
 
+        # Читаем признак отправки TG один раз при старте
+        try:
+            tg_enabled = fetch_tg_enabled(conn)
+            logger.info(f"📣 Отправка TG: {'ВКЛ' if tg_enabled else 'ВЫКЛ'}")
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось прочитать tg_enabled: {e}")
+            tg_enabled = False
+
         iteration = 0
 
         while not should_stop():
@@ -172,7 +189,7 @@ def robot():
             for row in rows:
                 if should_stop():
                     break
-                process_instrument(dict(row), proxy)
+                process_instrument(dict(row), proxy, tg_enabled)
 
             logger.info(f"✅ Итерация {iteration} завершена, строк: {len(rows)}")
 
