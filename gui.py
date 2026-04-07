@@ -143,6 +143,38 @@ class SpinWidget(QWidget):
             QMessageBox.critical(None, "Ошибка БД", str(e))
 
 
+
+# ─── Виджет: спинбокс дробное число ─────────────────────────────────────────
+class DoubleSpinWidget(QWidget):
+    """Дробный спинбокс. Сохраняет в БД при потере фокуса."""
+
+    def __init__(self, isin: str, field: str, value: float = 0.0, parent=None):
+        super().__init__(parent)
+        self._isin  = isin
+        self._field = field
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+
+        self._spin = QDoubleSpinBox()
+        self._spin.setRange(0.0, 9_999_999.0)
+        self._spin.setDecimals(4)
+        self._spin.setValue(float(value or 0.0))
+        self._spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+        self._spin.setStyleSheet(
+            "QDoubleSpinBox { background: transparent; color: #dcdcdc; border: none; }"
+        )
+        self._spin.editingFinished.connect(self._on_changed)
+        layout.addWidget(self._spin)
+        self.setStyleSheet("background: transparent;")
+
+    def _on_changed(self):
+        try:
+            db.update_field(self._isin, self._field, self._spin.value())
+        except Exception as e:
+            QMessageBox.critical(None, "Ошибка БД", str(e))
+
+
 # ─── Виджет: текстовое поле (интервал) ───────────────────────────────────────
 class IntervalWidget(QWidget):
     """Текстовое поле формата HH:MM-HH:MM. Сохраняет при потере фокуса."""
@@ -558,6 +590,7 @@ class MainWindow(QMainWindow):
         self._build_central()
         self._load_from_db()
         self._robot_process = None
+        self._start_readonly_timer()
         self._load_decay()
         self._load_tg_enabled()
         self._poll_timer = QTimer(self)
@@ -648,7 +681,7 @@ class MainWindow(QMainWindow):
         tb.addWidget(lbl_decay)
 
         self._spin_decay = QDoubleSpinBox()
-        self._spin_decay.setRange(0.0, 60.0)
+        self._spin_decay.setRange(0.0, 9999.0)
         self._spin_decay.setSingleStep(0.5)
         self._spin_decay.setDecimals(1)
         self._spin_decay.setValue(1.0)
@@ -800,8 +833,8 @@ class MainWindow(QMainWindow):
         # 5 — Лучший оффер вкл/выкл (best_offer)
         self.table.setCellWidget(row, 5, ToggleWidget(isin, "best_offer", r.get("best_offer","OFF")))
 
-        # 6 — Лимит цены (price_limit)
-        self.table.setCellWidget(row, 6, SpinWidget(isin, "price_limit", r.get("price_limit",0)))
+        # 6 — Лимит цены (price_limit) — дробное
+        self.table.setCellWidget(row, 6, DoubleSpinWidget(isin, "price_limit", r.get("price_limit",0)))
 
         # 7 — Лимит бидов (bid_limit)
         self.table.setCellWidget(row, 7, SpinWidget(isin, "bid_limit", r.get("bid_limit",0)))
@@ -898,6 +931,7 @@ class MainWindow(QMainWindow):
     def _check_robot(self):
         if self._robot_process is not None and self._robot_process.poll() is not None:
             self._robot_process = None
+            self._start_readonly_timer()
             self._load_decay()
             self._load_tg_enabled()
             self._set_lamp(False)
@@ -951,6 +985,50 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Ошибка", f"Не удалось сохранить:\n{e}")
 
+    def _start_readonly_timer(self):
+        self._readonly_timer = QTimer(self)
+        self._readonly_timer.setInterval(2000)  # каждые 2 сек
+        self._readonly_timer.timeout.connect(self._refresh_readonly_cells)
+        self._readonly_timer.start()
+
+    def _refresh_readonly_cells(self):
+        """Обновляет read-only колонки bid_curr и trades_curr из БД."""
+        try:
+            rows = db.fetch_all_instruments()
+        except Exception:
+            return
+        # Строим индекс isin -> row
+        isin_to_row = {}
+        for r in range(self.table.rowCount()):
+            w = self.table.cellWidget(r, 1)  # ToggleWidget хранит _isin
+            if hasattr(w, "_isin"):
+                isin_to_row[w._isin] = r
+        for rec in rows:
+            isin = rec["isin"]
+            r = isin_to_row.get(isin)
+            if r is None:
+                continue
+            # col 8 — bid_curr
+            item8 = self.table.item(r, 8)
+            val8  = str(rec.get("bid_curr", 0))
+            if item8:
+                item8.setText(val8)
+            else:
+                from PyQt5.QtWidgets import QTableWidgetItem as _QTW
+                it = _QTW(val8)
+                it.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(r, 8, it)
+            # col 10 — trades_curr
+            item10 = self.table.item(r, 10)
+            val10  = str(rec.get("trades_curr", 0))
+            if item10:
+                item10.setText(val10)
+            else:
+                from PyQt5.QtWidgets import QTableWidgetItem as _QTW
+                it = _QTW(val10)
+                it.setTextAlignment(Qt.AlignCenter)
+                self.table.setItem(r, 10, it)
+
     def _read_log(self):
         log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robot.log")
         if not os.path.exists(log_path):
@@ -986,6 +1064,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._poll_timer.stop()
         self._log_timer.stop()
+        self._readonly_timer.stop()
         self._stop_robot()
         import time as _t; _t.sleep(0.4)
         if self._robot_process and self._robot_process.poll() is None:
