@@ -252,6 +252,39 @@ def update_bid_curr(conn, isin: str, bid_curr: int):
             (bid_curr, isin)
         )
 
+# ─── Алерты по стакану ───────────────────────────────────────────────────────
+def check_big_bid_alerts(isin: str, price_limit: float,
+                         big_bid_alert_qty: int) -> list:
+    """
+    Ищет уровни bid выше price_limit с qty >= big_bid_alert_qty.
+    Возвращает список строк вида [(price, qty), ...].
+    """
+    if not big_bid_alert_qty or big_bid_alert_qty <= 0:
+        return []
+    if not price_limit or price_limit <= 0:
+        return []
+
+    with orderbook_lock:
+        ob = orderbook_cache.get(isin)
+
+    if not ob:
+        return []
+
+    hits = []
+    for lvl in (ob.get("bid") or []):
+        try:
+            p = float(lvl.get("price", 0))
+            q = int(lvl.get("quantity", 0))
+            if p >= price_limit and q >= big_bid_alert_qty:
+                hits.append((p, q))
+        except (ValueError, TypeError):
+            pass
+
+    # Сортируем от лучшей цены (наибольшей) к худшей
+    hits.sort(key=lambda x: x[0], reverse=True)
+    return hits
+
+
 # ─── Обработка одной строки ───────────────────────────────────────────────────
 def process_instrument(conn, row: dict, proxy: Optional[dict], tg_enabled: bool = False):
     name  = row.get("name",  "—")
@@ -262,28 +295,58 @@ def process_instrument(conn, row: dict, proxy: Optional[dict], tg_enabled: bool 
     for key, value in row.items():
         logger.info(f"   {key} = {value}")
 
-    # ── Расчёт и сохранение bid_curr ─────────────────────────────────────────
+    # ── 1. Расчёт и сохранение bid_curr ──────────────────────────────────────
+    price_limit       = float(row.get("price_limit")       or 0)
+    bid_limit         = int(row.get("bid_limit")            or 0)
+    big_bid_alert_qty = int(row.get("big_bid_alert_qty")    or 0)
+    tgapi             = (row.get("tgapi")  or "").strip()
+    tgchat            = (row.get("tgchat") or "").strip()
+    tg_ready          = tg_enabled and bool(tgapi) and bool(tgchat)
+
     try:
-        price_limit = float(row.get("price_limit") or 0)
-        bid_curr    = calc_bid_curr(isin, price_limit)
+        bid_curr = calc_bid_curr(isin, price_limit)
         update_bid_curr(conn, isin, bid_curr)
         logger.info(f"   bid_curr = {bid_curr}  (price_limit >= {price_limit})")
     except Exception as e:
         logger.warning(f"⚠️ Ошибка расчёта bid_curr для {name}: {e}")
+        bid_curr = 0
 
-    if tg_enabled:
-        tgapi  = (row.get("tgapi")  or "").strip()
-        tgchat = (row.get("tgchat") or "").strip()
-
-        if tgapi and tgchat:
-            msg = format_orderbook(isin, name, board)
-            ok  = send_telegram(tgapi, tgchat, msg, proxy)
+    # ── 2. Алерт: bid_curr >= bid_limit ──────────────────────────────────────
+    if bid_limit > 0 and bid_curr >= bid_limit:
+        msg = (
+            f"🔔 {name} | {isin}\n"
+            f"Сумма бидов ≥ {price_limit}: {bid_curr} шт\n"
+            f"Превышает лимит: {bid_limit} шт"
+        )
+        logger.info(f"   🔔 bid_curr ({bid_curr}) >= bid_limit ({bid_limit})")
+        if tg_ready:
+            ok = send_telegram(tgapi, tgchat, msg, proxy)
             if ok:
-                logger.info(f"📨 TG → {tgchat}: стакан {name} отправлен")
+                logger.info(f"📨 TG → {tgchat}: алерт bid_limit")
         else:
-            logger.info(f"   (TG не настроен для {name})")
-    else:
-        logger.info(f"   (TG отключён глобально)")
+            if not tg_enabled:
+                logger.info("   (TG отключён глобально)")
+            else:
+                logger.info("   (TG не настроен для инструмента)")
+
+    # ── 3. Алерт: крупные биды выше price_limit ──────────────────────────────
+    if big_bid_alert_qty > 0:
+        hits = check_big_bid_alerts(isin, price_limit, big_bid_alert_qty)
+        if hits:
+            lines = [f"🐋 {name} | {isin}", f"Крупные биды ≥ {price_limit}:"]
+            for p, q in hits:
+                lines.append(f"  цена {p:.4f} — {q} шт")
+            msg = "\n".join(lines)
+            logger.info(f"   🐋 Крупные биды: {hits}")
+            if tg_ready:
+                ok = send_telegram(tgapi, tgchat, msg, proxy)
+                if ok:
+                    logger.info(f"📨 TG → {tgchat}: алерт big_bid")
+            else:
+                if not tg_enabled:
+                    logger.info("   (TG отключён глобально)")
+                else:
+                    logger.info("   (TG не настроен для инструмента)")
 
 
 # ─── Основной цикл ────────────────────────────────────────────────────────────
