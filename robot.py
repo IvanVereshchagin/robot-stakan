@@ -216,8 +216,44 @@ def fetch_tg_enabled(conn) -> bool:
     return bool(row[0]) if row else False
 
 
+
+
+# ─── Расчёт bid_curr ──────────────────────────────────────────────────────────
+def calc_bid_curr(isin: str, price_limit: float) -> int:
+    """
+    Суммирует qty всех bid-уровней стакана, цена которых >= price_limit.
+    Возвращает 0 если стакан пуст или price_limit == 0.
+    """
+    if not price_limit or price_limit <= 0:
+        return 0
+
+    with orderbook_lock:
+        ob = orderbook_cache.get(isin)
+
+    if not ob:
+        return 0
+
+    total = 0
+    for lvl in (ob.get("bid") or []):
+        try:
+            if float(lvl.get("price", 0)) >= price_limit:
+                total += int(lvl.get("quantity", 0))
+        except (ValueError, TypeError):
+            pass
+
+    return total
+
+
+def update_bid_curr(conn, isin: str, bid_curr: int):
+    """Записывает bid_curr в БД для данного инструмента."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE instruments SET bid_curr = %s WHERE isin = %s",
+            (bid_curr, isin)
+        )
+
 # ─── Обработка одной строки ───────────────────────────────────────────────────
-def process_instrument(row: dict, proxy: Optional[dict], tg_enabled: bool = False):
+def process_instrument(conn, row: dict, proxy: Optional[dict], tg_enabled: bool = False):
     name  = row.get("name",  "—")
     isin  = row.get("isin",  "—")
     board = row.get("board", "—")
@@ -225,6 +261,15 @@ def process_instrument(row: dict, proxy: Optional[dict], tg_enabled: bool = Fals
     logger.info(f"── {name} ({isin}) ──")
     for key, value in row.items():
         logger.info(f"   {key} = {value}")
+
+    # ── Расчёт и сохранение bid_curr ─────────────────────────────────────────
+    try:
+        price_limit = float(row.get("price_limit") or 0)
+        bid_curr    = calc_bid_curr(isin, price_limit)
+        update_bid_curr(conn, isin, bid_curr)
+        logger.info(f"   bid_curr = {bid_curr}  (price_limit >= {price_limit})")
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка расчёта bid_curr для {name}: {e}")
 
     if tg_enabled:
         tgapi  = (row.get("tgapi")  or "").strip()
@@ -302,7 +347,7 @@ def robot():
             for row in rows:
                 if should_stop():
                     break
-                process_instrument(dict(row), proxy, tg_enabled)
+                process_instrument(conn, dict(row), proxy, tg_enabled)
 
             logger.info(f"✅ Итерация {iteration} завершена, строк: {len(rows)}")
 
