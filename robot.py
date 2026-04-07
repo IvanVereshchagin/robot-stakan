@@ -9,6 +9,7 @@ from psycopg2.extras import RealDictCursor
 from threading import RLock
 from QuikPy import QuikPy
 import requests
+from typing import Optional
 
 # ─── Логирование ─────────────────────────────────────────────────────────────
 LOG_PATH = os.path.join(os.path.dirname(__file__), "robot.log")
@@ -72,11 +73,21 @@ def on_quote_callback(data):
 
 # ─── Подписка на стаканы ──────────────────────────────────────────────────────
 def subscribe_all_books(qp: QuikPy, instruments: list):
+    """
+    Подписываемся напрямую через process_request, минуя
+    is_subscribed_level2_quotes() внутри subscribe_level2_quotes —
+    это избегает конкуренции за Lock с CallbackThread.
+    """
     for row in instruments:
         board = row["board"]
         isin  = row["isin"]
         try:
-            qp.subscribe_level2_quotes(board, isin)
+            qp.process_request({
+                "data": f"{board}|{isin}",
+                "id": 0,
+                "cmd": "Subscribe_Level_II_Quotes",
+                "t": ""
+            })
             logger.info(f"📶 Подписка L2: {board}.{isin}")
         except Exception as e:
             logger.warning(f"⚠️ Подписка L2 {board}.{isin}: {e}")
@@ -150,7 +161,7 @@ def format_orderbook(isin: str, name: str, board: str) -> str:
 
 
 # ─── Telegram ─────────────────────────────────────────────────────────────────
-def send_telegram(tgapi: str, chat_id: str, text: str, proxy: dict | None) -> bool:
+def send_telegram(tgapi: str, chat_id: str, text: str, proxy: Optional[dict]) -> bool:
     url     = f"https://api.telegram.org/bot{tgapi}/sendMessage"
     session = requests.Session()
 
@@ -192,7 +203,7 @@ def fetch_decay(conn) -> float:
         row = cur.fetchone()
     return float(row[0]) if row and row[0] is not None else 1.0
 
-def fetch_active_proxy(conn) -> dict | None:
+def fetch_active_proxy(conn) -> Optional[dict]:
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM proxies WHERE is_active = TRUE LIMIT 1")
         row = cur.fetchone()
@@ -206,7 +217,7 @@ def fetch_tg_enabled(conn) -> bool:
 
 
 # ─── Обработка одной строки ───────────────────────────────────────────────────
-def process_instrument(row: dict, proxy: dict | None, tg_enabled: bool = False):
+def process_instrument(row: dict, proxy: Optional[dict], tg_enabled: bool = False):
     name  = row.get("name",  "—")
     isin  = row.get("isin",  "—")
     board = row.get("board", "—")
@@ -241,7 +252,7 @@ def robot():
     try:
         qp = QuikPy()
         # Вешаем колбэк на обновления стакана
-        qp.on_quote = on_quote_callback
+        qp.on_quote.subscribe(on_quote_callback)
         logger.info("✅ Подключение к QUIK установлено")
 
         conn = psycopg2.connect(**DB_CONFIG)
@@ -319,7 +330,12 @@ def robot():
                 if conn:
                     for row in fetch_instruments(conn):
                         try:
-                            qp.unsubscribe_level2_quotes(row["board"], row["isin"])
+                            qp.process_request({
+                                "data": f"{row['board']}|{row['isin']}",
+                                "id": 0,
+                                "cmd": "Unsubscribe_Level_II_Quotes",
+                                "t": ""
+                            })
                         except Exception:
                             pass
                 qp.close_connection_and_thread()
