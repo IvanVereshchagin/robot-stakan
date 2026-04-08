@@ -367,6 +367,48 @@ def cancel_best_offer_order(qp: QuikPy, board: str, isin: str,
     logger.info(f"❌ Best offer снят: {isin} order_num={order_num}")
 
 
+
+
+# ─── Best offer: снять все при остановке / очистить БД ───────────────────────
+def cancel_all_active_best_offers(qp: QuikPy, conn) -> None:
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM best_offer_orders WHERE is_active = 1")
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось прочитать active best_offer orders: {e}")
+        return
+
+    if not rows:
+        logger.info("✅ Активных best_offer заявок нет — снимать нечего")
+        return
+
+    for row in rows:
+        try:
+            cancel_best_offer_order(qp, row["board"], row["isin"],
+                                    row["order_num"], row["account"])
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка снятия {row['order_num']}: {e}")
+
+    time.sleep(1.5)  # даём QUIK обработать снятие
+
+
+def cleanup_best_offer_db(conn) -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM best_offer_orders WHERE is_active = 1")
+            still_active = cur.fetchone()[0]
+        if still_active:
+            logger.warning(
+                f"⚠️ После снятия в БД ещё {still_active} активных заявок — чистим"
+            )
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM best_offer_orders")
+            cur.execute("DELETE FROM best_offer_trades")
+        logger.info("🧹 Таблицы best_offer_orders и best_offer_trades очищены")
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка очистки best_offer таблиц: {e}")
+
 # ─── Обработка одной строки ──────────────────────────────────────────────────
 def process_instrument(conn, qp: QuikPy, row: dict,
                        proxy: Optional[dict], tg_enabled: bool = False):
@@ -379,6 +421,12 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     # Пропускаем если condition != ON
     if (row.get("condition") or "").strip().upper() != "ON":
         logger.info(f"   ⏭ Пропускаем — condition = {row.get('condition')}")
+        with best_offer_lock:
+            active = best_offer_orders.get(isin)
+        if active:
+            account = (row.get("account") or "").strip()
+            logger.info(f"   Снимаем best_offer т.к. condition=OFF: {isin}")
+            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
         return
 
     for key, value in row.items():
@@ -435,6 +483,14 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     best_offer_on  = (row.get("best_offer") or "").strip().upper() == "ON"
     best_offer_qty = int(row.get("best_offer_qty") or 0)
 
+    if not best_offer_on:
+        with best_offer_lock:
+            active = best_offer_orders.get(isin)
+        if active:
+            logger.info(f"   Best offer выключен — снимаем заявку {active['order_num']}")
+            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+        # не выходим из функции — остальная логика (bid_curr, алерты) уже отработала
+
     if best_offer_on and best_offer_qty > 0 and account:
         with orderbook_lock:
             ob = orderbook_cache.get(isin) or {}
@@ -443,9 +499,23 @@ def process_instrument(conn, qp: QuikPy, row: dict,
         if not offers:
             logger.info(f"   Best offer: стакан офферов пуст — пропускаем")
         else:
-            best_ask     = float(offers[0].get("price", 0))
-            price_step   = get_price_step(qp, board, isin)
-            target_price = round(best_ask - price_step, 8)
+            best_ask          = float(offers[0].get("price", 0))
+            price_step        = get_price_step(qp, board, isin)
+            target_price      = round(best_ask - price_step, 8)
+            best_offer_limit  = float(row.get("best_offer_limit") or 0)
+
+            # Если расчётная цена <= лимиту — не встаём, снимаем если стоим
+            if best_offer_limit > 0 and target_price <= best_offer_limit:
+                logger.info(
+                    f"   Best offer: target {target_price} <= лимит {best_offer_limit}"
+                    f" — не выставляем"
+                )
+                with best_offer_lock:
+                    active = best_offer_orders.get(isin)
+                if active:
+                    cancel_best_offer_order(qp, board, isin,
+                                            active["order_num"], account)
+                return  # не выставляем
 
             with best_offer_lock:
                 active = best_offer_orders.get(isin)
@@ -566,6 +636,9 @@ def robot():
                             })
                         except Exception:
                             pass
+                    cancel_all_active_best_offers(qp, conn)
+                    cleanup_best_offer_db(conn)
+
                 qp.close_connection_and_thread()
                 logger.info("🔒 Соединение с QUIK закрыто")
             except Exception as e:

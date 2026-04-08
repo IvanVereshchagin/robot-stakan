@@ -46,6 +46,7 @@ DDL_STATEMENTS = [
         trade_interval   TEXT    NOT NULL DEFAULT '10:00-23:50',
         best_offer_qty   INT     NOT NULL DEFAULT 0,
         best_offer       TEXT    NOT NULL DEFAULT 'OFF',
+        best_offer_limit  NUMERIC NOT NULL DEFAULT 0,
         price_limit      NUMERIC NOT NULL DEFAULT 0,
         bid_limit        INT     NOT NULL DEFAULT 0,
         bid_curr         INT     NOT NULL DEFAULT 0,
@@ -183,7 +184,10 @@ DDL_STATEMENTS = [
         account     TEXT,
         dt_trade    TEXT
     );
-    """
+    """ , 
+
+
+    """ALTER TABLE instruments ADD COLUMN IF NOT EXISTS best_offer_limit NUMERIC NOT NULL DEFAULT 0;"""
 ]
 
 # Поля, которые пользователь может редактировать

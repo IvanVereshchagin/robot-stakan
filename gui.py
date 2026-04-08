@@ -35,6 +35,7 @@ HEADERS = [
     "Боевой\nрежим",
     "Торговля",
     "Лучший\nоффер кол-во",
+    "Лимит\nлучш. оффер",
     "Лучший\nоффер",
     "Лимит\nцены",
     "Лимит\nбидов",
@@ -56,16 +57,17 @@ COL_FIELD = {
     3:  "trade_interval",       # Торговля
     4:  "best_offer_qty",       # Лучший оффер кол-во
     5:  "best_offer",           # Лучший оффер вкл/выкл
-    6:  "price_limit",          # Лимит цены
-    7:  "bid_limit",            # Лимит бидов
-    8:  None,                   # Текущее кол-во бид (read-only)
-    9:  "trades_limit",         # Лимит сделок
-    10: None,                   # Кол-во сделок (read-only)
-    11: "big_bid_alert_qty",    # Большой бид алерт
-    12: "tgapi",               # API Telegram
-    13: "tgchat",              # Chat ID Telegram
-    14: "account",             # Аккаунт
-    15: "client_code",         # Код клиента
+    6: "best_offer_limit", 
+    7:  "price_limit",          # Лимит цены
+    8:  "bid_limit",            # Лимит бидов
+    9:  None,                   # Текущее кол-во бид (read-only)
+    10:  "trades_limit",         # Лимит сделок
+    11: None,                   # Кол-во сделок (read-only)
+    12: "big_bid_alert_qty",    # Большой бид алерт
+    13: "tgapi",               # API Telegram
+    14: "tgchat",              # Chat ID Telegram
+    15: "account",             # Аккаунт
+    16: "client_code",         # Код клиента
 }
 
 
@@ -833,41 +835,43 @@ class MainWindow(QMainWindow):
         # 5 — Лучший оффер вкл/выкл (best_offer)
         self.table.setCellWidget(row, 5, ToggleWidget(isin, "best_offer", r.get("best_offer","OFF")))
 
+        self.table.setCellWidget(row, 6, DoubleSpinWidget(isin, "best_offer_limit", r.get("best_offer_limit", 0)))
+
         # 6 — Лимит цены (price_limit) — дробное
-        self.table.setCellWidget(row, 6, DoubleSpinWidget(isin, "price_limit", r.get("price_limit",0)))
+        self.table.setCellWidget(row, 7, DoubleSpinWidget(isin, "price_limit", r.get("price_limit",0)))
 
         # 7 — Лимит бидов (bid_limit)
-        self.table.setCellWidget(row, 7, SpinWidget(isin, "bid_limit", r.get("bid_limit",0)))
+        self.table.setCellWidget(row, 8, SpinWidget(isin, "bid_limit", r.get("bid_limit",0)))
 
         # 8 — Текущее кол-во бид (read-only)
-        self.table.setItem(row, 8, label(r.get("bid_curr", 0)))
+        self.table.setItem(row, 9, label(r.get("bid_curr", 0)))
 
         # 9 — Лимит сделок (trades_limit)
-        self.table.setCellWidget(row, 9, SpinWidget(isin, "trades_limit", r.get("trades_limit",0)))
+        self.table.setCellWidget(row, 10, SpinWidget(isin, "trades_limit", r.get("trades_limit",0)))
 
         # 10 — Кол-во сделок (read-only)
-        self.table.setItem(row, 10, label(r.get("trades_curr", 0)))
+        self.table.setItem(row, 11, label(r.get("trades_curr", 0)))
 
         # 11 — Большой бид алерт (big_bid_alert_qty)
-        self.table.setCellWidget(row, 11, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty",0)))
+        self.table.setCellWidget(row, 12, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty",0)))
 
         # 12 — API Telegram (combobox из таблицы tgapi)
-        self.table.setCellWidget(row, 12, ComboWidget(
+        self.table.setCellWidget(row, 13, ComboWidget(
             isin, "tgapi", db.fetch_tgapi, r.get("tgapi", "")
         ))
 
         # 13 — Chat ID Telegram (combobox из таблицы tgchat)
-        self.table.setCellWidget(row, 13, ComboWidget(
+        self.table.setCellWidget(row, 14, ComboWidget(
             isin, "tgchat", db.fetch_tgchat, r.get("tgchat", "")
         ))
 
         # 14 — Аккаунт
-        self.table.setCellWidget(row, 14, ComboWidget(
+        self.table.setCellWidget(row, 15, ComboWidget(
             isin, "account", db.fetch_accounts, r.get("account", "")
         ))
 
         # 15 — Код клиента
-        self.table.setCellWidget(row, 15, ComboWidget(
+        self.table.setCellWidget(row, 16, ComboWidget(
             isin, "client_code", db.fetch_client_codes, r.get("client_code", "")
         ))
 
