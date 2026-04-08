@@ -148,6 +148,42 @@ DDL_STATEMENTS = [
         tgchat TEXT NOT NULL UNIQUE
     );
     """,
+
+    # Best offer заявки
+    """
+    CREATE TABLE IF NOT EXISTS best_offer_orders (
+        order_num    TEXT PRIMARY KEY,
+        is_active    INT,
+        is_cancelled INT,
+        is_sell      INT,
+        price        NUMERIC,
+        qty          INT,
+        balance      INT,
+        trans_id     TEXT,
+        isin         TEXT,
+        board        TEXT,
+        account      TEXT,
+        client_code  TEXT,
+        dt_place     TEXT,
+        dt_kill      TEXT
+    );
+    """,
+
+    # Best offer сделки
+    """
+    CREATE TABLE IF NOT EXISTS best_offer_trades (
+        trade_num   TEXT PRIMARY KEY,
+        order_num   TEXT,
+        price       NUMERIC,
+        qty         INT,
+        is_sell     INT,
+        trans_id    TEXT,
+        isin        TEXT,
+        board       TEXT,
+        account     TEXT,
+        dt_trade    TEXT
+    );
+    """
 ]
 
 # Поля, которые пользователь может редактировать

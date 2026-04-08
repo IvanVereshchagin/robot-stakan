@@ -10,6 +10,7 @@ from threading import RLock
 from QuikPy import QuikPy
 import requests
 from typing import Optional
+from decimal import Decimal
 
 # ─── Логирование ─────────────────────────────────────────────────────────────
 LOG_PATH = os.path.join(os.path.dirname(__file__), "robot.log")
@@ -46,38 +47,153 @@ def cleanup_flag():
         pass
 
 # ─── Кэш стаканов ────────────────────────────────────────────────────────────
-orderbook_cache: dict = {}   # key: isin -> {"bid": [...], "offer": [...]}
+orderbook_cache: dict = {}
 orderbook_lock  = RLock()
 
+# ─── Кэш best_offer заявок ───────────────────────────────────────────────────
+# key: isin -> {"order_num": str, "price": float, "qty": int}
+best_offer_orders: dict = {}
+best_offer_lock = RLock()
 
-# ─── Callback: обновление стакана ─────────────────────────────────────────────
+# ─── TRANS_ID префикс best_offer ─────────────────────────────────────────────
+BEST_OFFER_TRANS_ID_PREFIX = "1212"
+
+# ─── Вспомогательная: парсинг datetime из QUIK ───────────────────────────────
+def parse_quik_dt(d: dict) -> str:
+    from datetime import datetime as _dt
+    try:
+        return _dt(
+            d.get("year", 0), d.get("month", 0), d.get("day", 0),
+            d.get("hour", 0), d.get("min",   0), d.get("sec",  0),
+            d.get("ms",   0) * 1000
+        ).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    except Exception:
+        return "-"
+
+
+# ─── Callback: обновление стакана ────────────────────────────────────────────
 def on_quote_callback(data):
-    q          = data.get("data") or {}
-    sec_code   = q.get("sec_code")
+    q        = data.get("data") or {}
+    sec_code = q.get("sec_code")
     if not sec_code:
         return
-
     bids   = q.get("bid")   or []
     offers = q.get("offer") or []
-
     with orderbook_lock:
         old = orderbook_cache.get(sec_code)
         if old:
-            old_bids   = old.get("bid")   or []
-            old_offers = old.get("offer") or []
-            if (len(bids) == len(old_bids) and len(offers) == len(old_offers)
-                    and bids == old_bids and offers == old_offers):
-                return   # ничего не изменилось
+            if (len(bids) == len(old.get("bid", [])) and
+                    len(offers) == len(old.get("offer", [])) and
+                    bids == old.get("bid") and offers == old.get("offer")):
+                return
         orderbook_cache[sec_code] = {"bid": bids, "offer": offers}
 
 
-# ─── Подписка на стаканы ──────────────────────────────────────────────────────
+# ─── Callback: заявка (OnOrder) ──────────────────────────────────────────────
+def on_order_callback(data):
+    order    = data.get("data") or {}
+    trans_id = str(order.get("trans_id") or "")
+    if not trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX):
+        return
+
+    ORDER_NUM    = str(order.get("order_num") or "")
+    flags        = int(order.get("flags") or 0)
+    IS_ACTIVE    = int(bool(flags & 0x1))
+    IS_CANCELLED = int(bool(flags & 0x2))
+    IS_SELL      = int(bool(flags & 0x4))
+    PRICE        = order.get("price")
+    QTY          = int(order.get("qty")     or 0)
+    BALANCE      = int(order.get("balance") or 0)
+    ISIN         = order.get("sec_code")
+    BOARD        = order.get("class_code")
+    ACCOUNT      = order.get("account")
+    CLIENT_CODE  = order.get("client_code")
+    DT_PLACE     = parse_quik_dt(order.get("datetime")          or {})
+    DT_KILL      = parse_quik_dt(order.get("withdraw_datetime") or {})
+
+    # Обновляем in-memory кэш
+    with best_offer_lock:
+        if IS_ACTIVE:
+            best_offer_orders[ISIN] = {
+                "order_num": ORDER_NUM,
+                "price":     float(PRICE or 0),
+                "qty":       QTY,
+            }
+        else:
+            best_offer_orders.pop(ISIN, None)
+
+    # Пишем в БД своим соединением — колбэк живёт в CallbackThread
+    try:
+        with psycopg2.connect(**DB_CONFIG) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO best_offer_orders (
+                        order_num, is_active, is_cancelled, is_sell,
+                        price, qty, balance, trans_id,
+                        isin, board, account, client_code, dt_place, dt_kill
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (order_num) DO UPDATE SET
+                        is_active    = EXCLUDED.is_active,
+                        is_cancelled = EXCLUDED.is_cancelled,
+                        price        = EXCLUDED.price,
+                        qty          = EXCLUDED.qty,
+                        balance      = EXCLUDED.balance,
+                        dt_kill      = EXCLUDED.dt_kill
+                """, (
+                    ORDER_NUM, IS_ACTIVE, IS_CANCELLED, IS_SELL,
+                    PRICE, QTY, BALANCE, trans_id,
+                    ISIN, BOARD, ACCOUNT, CLIENT_CODE, DT_PLACE, DT_KILL
+                ))
+        status = "активна" if IS_ACTIVE else "снята"
+        logger.info(f"📋 Заявка {ORDER_NUM} ({ISIN}) {status} @ {PRICE} x {QTY}")
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка записи заявки {ORDER_NUM}: {e}")
+
+
+# ─── Callback: сделка (OnTrade) ──────────────────────────────────────────────
+def on_trade_callback(data):
+    trade    = data.get("data") or {}
+    trans_id = str(trade.get("trans_id") or "")
+    if not trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX):
+        return
+
+    TRADE_NUM = str(trade.get("trade_num") or "")
+    ORDER_NUM = str(trade.get("order_num") or "")
+    PRICE     = trade.get("price")
+    QTY       = int(trade.get("qty") or 0)
+    flags     = int(trade.get("flags") or 0)
+    IS_SELL   = int(bool(flags & 0x4))
+    ISIN      = trade.get("sec_code")
+    BOARD     = trade.get("class_code")
+    ACCOUNT   = trade.get("account")
+    DT_TRADE  = parse_quik_dt(trade.get("datetime") or {})
+
+    # Снимаем из кэша — process_instrument перевыставит на следующей итерации
+    with best_offer_lock:
+        best_offer_orders.pop(ISIN, None)
+
+    try:
+        with psycopg2.connect(**DB_CONFIG) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO best_offer_trades (
+                        trade_num, order_num, price, qty, is_sell,
+                        trans_id, isin, board, account, dt_trade
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (trade_num) DO UPDATE SET
+                        qty   = EXCLUDED.qty,
+                        price = EXCLUDED.price
+                """, (
+                    TRADE_NUM, ORDER_NUM, PRICE, QTY, IS_SELL,
+                    trans_id, ISIN, BOARD, ACCOUNT, DT_TRADE
+                ))
+        logger.info(f"💰 Сделка {TRADE_NUM} ({ISIN}) @ {PRICE} x {QTY} — перевыставим на след. итерации")
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка записи сделки {TRADE_NUM}: {e}")
+
+
+# ─── Подписка / инициализация стаканов ───────────────────────────────────────
 def subscribe_all_books(qp: QuikPy, instruments: list):
-    """
-    Подписываемся напрямую через process_request, минуя
-    is_subscribed_level2_quotes() внутри subscribe_level2_quotes —
-    это избегает конкуренции за Lock с CallbackThread.
-    """
     for row in instruments:
         board = row["board"]
         isin  = row["isin"]
@@ -94,92 +210,36 @@ def subscribe_all_books(qp: QuikPy, instruments: list):
 
 
 def preload_orderbooks(qp: QuikPy, instruments: list):
-    """Инициализируем стаканы сразу после подписки — до первого цикла."""
     for row in instruments:
         board = row["board"]
         isin  = row["isin"]
         try:
-            resp = qp.get_quote_level2(board, isin)
-            data = resp.get("data") or {}
-            bids   = data.get("bid")   or []
-            offers = data.get("offer") or []
+            resp   = qp.get_quote_level2(board, isin)
+            d      = resp.get("data") or {}
+            bids   = d.get("bid")   or []
+            offers = d.get("offer") or []
             with orderbook_lock:
                 orderbook_cache[isin] = {"bid": bids, "offer": offers}
             if bids or offers:
-                logger.info(f"📖 Стакан загружен: {board}.{isin}  "
-                            f"bid={len(bids)} offer={len(offers)}")
+                logger.info(f"📖 Стакан {board}.{isin}: bid={len(bids)} offer={len(offers)}")
             else:
                 logger.warning(f"⚠️ Пустой стакан при старте: {board}.{isin}")
         except Exception as e:
             logger.warning(f"⚠️ Ошибка инициализации стакана {board}.{isin}: {e}")
 
 
-# ─── Форматирование стакана для Telegram ──────────────────────────────────────
-def format_orderbook(isin: str, name: str, board: str) -> str:
-    """
-    Возвращает текст сообщения со стаканом для отправки в TG.
-    Показывает до 5 лучших уровней bid и offer.
-    """
-    MAX_LEVELS = 5
-
-    with orderbook_lock:
-        ob = orderbook_cache.get(isin)
-
-    if not ob:
-        return f"📋 {name} ({isin})\nСтакан пуст или не загружен"
-
-    bids   = ob.get("bid")   or []
-    offers = ob.get("offer") or []
-
-    # Лучший bid — последняя строка, лучший offer — первая строка
-    best_bids   = bids[-MAX_LEVELS:][::-1]   # топ 5 покупок, от лучшей вниз
-    best_offers = offers[:MAX_LEVELS]         # топ 5 продаж, от лучшей вверх
-
-    lines = [f"📊 {name} | {isin} | {board}", ""]
-
-    lines.append("  ПРОДАЖА (offer)")
-    if best_offers:
-        for lvl in reversed(best_offers):   # выводим от худшей к лучшей (сверху)
-            price = lvl.get("price", "?")
-            qty   = lvl.get("quantity", "?")
-            lines.append(f"  {float(price):>12.4f}   {qty}")
-    else:
-        lines.append("  —")
-
-    lines.append("─" * 28)
-
-    lines.append("  ПОКУПКА  (bid)")
-    if best_bids:
-        for lvl in best_bids:
-            price = lvl.get("price", "?")
-            qty   = lvl.get("quantity", "?")
-            lines.append(f"  {float(price):>12.4f}   {qty}")
-    else:
-        lines.append("  —")
-
-    return "\n".join(lines)
-
-
-# ─── Telegram ─────────────────────────────────────────────────────────────────
+# ─── Telegram ────────────────────────────────────────────────────────────────
 def send_telegram(tgapi: str, chat_id: str, text: str, proxy: Optional[dict]) -> bool:
     url     = f"https://api.telegram.org/bot{tgapi}/sendMessage"
     session = requests.Session()
-
     if proxy:
         user  = proxy.get("username", "")
         pwd   = proxy.get("password", "")
-        host  = proxy["host"]
-        port  = proxy["port"]
         auth  = f"{user}:{pwd}@" if user else ""
-        p_url = f"socks5h://{auth}{host}:{port}"
+        p_url = f"socks5h://{auth}{proxy['host']}:{proxy['port']}"
         session.proxies = {"http": p_url, "https": p_url}
-
     try:
-        resp = session.post(
-            url,
-            json={"chat_id": chat_id, "text": text},
-            timeout=30
-        )
+        resp = session.post(url, json={"chat_id": chat_id, "text": text}, timeout=30)
         if resp.status_code == 200:
             return True
         logger.warning(f"⚠️ TG {resp.status_code}: {resp.text[:120]}")
@@ -191,7 +251,7 @@ def send_telegram(tgapi: str, chat_id: str, text: str, proxy: Optional[dict]) ->
         session.close()
 
 
-# ─── Чтение из БД ─────────────────────────────────────────────────────────────
+# ─── Чтение из БД ────────────────────────────────────────────────────────────
 def fetch_instruments(conn) -> list:
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute("SELECT * FROM instruments ORDER BY name")
@@ -216,23 +276,14 @@ def fetch_tg_enabled(conn) -> bool:
     return bool(row[0]) if row else False
 
 
-
-
-# ─── Расчёт bid_curr ──────────────────────────────────────────────────────────
+# ─── Расчёт bid_curr ─────────────────────────────────────────────────────────
 def calc_bid_curr(isin: str, price_limit: float) -> int:
-    """
-    Суммирует qty всех bid-уровней стакана, цена которых >= price_limit.
-    Возвращает 0 если стакан пуст или price_limit == 0.
-    """
     if not price_limit or price_limit <= 0:
         return 0
-
     with orderbook_lock:
         ob = orderbook_cache.get(isin)
-
     if not ob:
         return 0
-
     total = 0
     for lvl in (ob.get("bid") or []):
         try:
@@ -240,36 +291,26 @@ def calc_bid_curr(isin: str, price_limit: float) -> int:
                 total += int(lvl.get("quantity", 0))
         except (ValueError, TypeError):
             pass
-
     return total
 
-
 def update_bid_curr(conn, isin: str, bid_curr: int):
-    """Записывает bid_curr в БД для данного инструмента."""
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE instruments SET bid_curr = %s WHERE isin = %s",
             (bid_curr, isin)
         )
 
+
 # ─── Алерты по стакану ───────────────────────────────────────────────────────
-def check_big_bid_alerts(isin: str, price_limit: float,
-                         big_bid_alert_qty: int) -> list:
-    """
-    Ищет уровни bid выше price_limit с qty >= big_bid_alert_qty.
-    Возвращает список строк вида [(price, qty), ...].
-    """
+def check_big_bid_alerts(isin: str, price_limit: float, big_bid_alert_qty: int) -> list:
     if not big_bid_alert_qty or big_bid_alert_qty <= 0:
         return []
     if not price_limit or price_limit <= 0:
         return []
-
     with orderbook_lock:
         ob = orderbook_cache.get(isin)
-
     if not ob:
         return []
-
     hits = []
     for lvl in (ob.get("bid") or []):
         try:
@@ -279,44 +320,89 @@ def check_big_bid_alerts(isin: str, price_limit: float,
                 hits.append((p, q))
         except (ValueError, TypeError):
             pass
-
-    # Сортируем от лучшей цены (наибольшей) к худшей
     hits.sort(key=lambda x: x[0], reverse=True)
     return hits
 
 
-# ─── Обработка одной строки ───────────────────────────────────────────────────
-def process_instrument(conn, row: dict, proxy: Optional[dict], tg_enabled: bool = False):
+# ─── Best offer: шаг цены ────────────────────────────────────────────────────
+def get_price_step(qp: QuikPy, board: str, isin: str) -> float:
+    try:
+        r   = qp.get_param_ex(board, isin, "SEC_PRICE_STEP")
+        val = r["data"].get("param_value") or "0.01"
+        s   = float(str(val).replace(",", "."))
+        return s if s > 0 else 0.01
+    except Exception:
+        return 0.01
+
+
+# ─── Best offer: выставить / снять заявку ────────────────────────────────────
+def send_best_offer_order(qp: QuikPy, board: str, isin: str,
+                          price: float, qty: int,
+                          account: str, client_code: str) -> None:
+    qp.send_transaction({
+        "ACCOUNT":     account,
+        "CLIENT_CODE": client_code,
+        "TYPE":        "L",
+        "OPERATION":   "S",
+        "CLASSCODE":   board,
+        "SECCODE":     isin,
+        "PRICE":       str(price),
+        "QUANTITY":    str(qty),
+        "TRANS_ID":    BEST_OFFER_TRANS_ID_PREFIX,
+        "ACTION":      "NEW_ORDER",
+    })
+    logger.info(f"📤 Best offer выставлен: {isin} SELL {qty} @ {price}")
+
+
+def cancel_best_offer_order(qp: QuikPy, board: str, isin: str,
+                            order_num: str, account: str) -> None:
+    qp.send_transaction({
+        "ACCOUNT":   account,
+        "CLASSCODE": board,
+        "SECCODE":   isin,
+        "ORDER_KEY": order_num,
+        "TRANS_ID":  BEST_OFFER_TRANS_ID_PREFIX,
+        "ACTION":    "KILL_ORDER",
+    })
+    logger.info(f"❌ Best offer снят: {isin} order_num={order_num}")
+
+
+# ─── Обработка одной строки ──────────────────────────────────────────────────
+def process_instrument(conn, qp: QuikPy, row: dict,
+                       proxy: Optional[dict], tg_enabled: bool = False):
     name  = row.get("name",  "—")
     isin  = row.get("isin",  "—")
     board = row.get("board", "—")
 
     logger.info(f"── {name} ({isin}) ──")
 
+    # Пропускаем если condition != ON
     if (row.get("condition") or "").strip().upper() != "ON":
+        logger.info(f"   ⏭ Пропускаем — condition = {row.get('condition')}")
+        return
 
-        return 
-    
     for key, value in row.items():
         logger.info(f"   {key} = {value}")
 
-    # ── 1. Расчёт и сохранение bid_curr ──────────────────────────────────────
-    price_limit       = float(row.get("price_limit")       or 0)
-    bid_limit         = int(row.get("bid_limit")            or 0)
-    big_bid_alert_qty = int(row.get("big_bid_alert_qty")    or 0)
+    price_limit       = float(row.get("price_limit")    or 0)
+    bid_limit         = int(row.get("bid_limit")         or 0)
+    big_bid_alert_qty = int(row.get("big_bid_alert_qty") or 0)
     tgapi             = (row.get("tgapi")  or "").strip()
     tgchat            = (row.get("tgchat") or "").strip()
     tg_ready          = tg_enabled and bool(tgapi) and bool(tgchat)
+    account           = (row.get("account")     or "").strip()
+    client_code       = (row.get("client_code") or "").strip()
 
+    # ── 1. bid_curr ───────────────────────────────────────────────────────────
     try:
         bid_curr = calc_bid_curr(isin, price_limit)
         update_bid_curr(conn, isin, bid_curr)
         logger.info(f"   bid_curr = {bid_curr}  (price_limit >= {price_limit})")
     except Exception as e:
-        logger.warning(f"⚠️ Ошибка расчёта bid_curr для {name}: {e}")
+        logger.warning(f"⚠️ bid_curr для {name}: {e}")
         bid_curr = 0
 
-    # ── 2. Алерт: bid_curr >= bid_limit ──────────────────────────────────────
+    # ── 2. Алерт bid_curr >= bid_limit ───────────────────────────────────────
     if bid_limit > 0 and bid_curr >= bid_limit:
         msg = (
             f"🔔 {name} | {isin}\n"
@@ -325,16 +411,12 @@ def process_instrument(conn, row: dict, proxy: Optional[dict], tg_enabled: bool 
         )
         logger.info(f"   🔔 bid_curr ({bid_curr}) >= bid_limit ({bid_limit})")
         if tg_ready:
-            ok = send_telegram(tgapi, tgchat, msg, proxy)
-            if ok:
+            if send_telegram(tgapi, tgchat, msg, proxy):
                 logger.info(f"📨 TG → {tgchat}: алерт bid_limit")
         else:
-            if not tg_enabled:
-                logger.info("   (TG отключён глобально)")
-            else:
-                logger.info("   (TG не настроен для инструмента)")
+            logger.info("   (TG отключён или не настроен)")
 
-    # ── 3. Алерт: крупные биды выше price_limit ──────────────────────────────
+    # ── 3. Алерт крупные биды ────────────────────────────────────────────────
     if big_bid_alert_qty > 0:
         hits = check_big_bid_alerts(isin, price_limit, big_bid_alert_qty)
         if hits:
@@ -344,17 +426,53 @@ def process_instrument(conn, row: dict, proxy: Optional[dict], tg_enabled: bool 
             msg = "\n".join(lines)
             logger.info(f"   🐋 Крупные биды: {hits}")
             if tg_ready:
-                ok = send_telegram(tgapi, tgchat, msg, proxy)
-                if ok:
+                if send_telegram(tgapi, tgchat, msg, proxy):
                     logger.info(f"📨 TG → {tgchat}: алерт big_bid")
             else:
-                if not tg_enabled:
-                    logger.info("   (TG отключён глобально)")
-                else:
-                    logger.info("   (TG не настроен для инструмента)")
+                logger.info("   (TG отключён или не настроен)")
+
+    # ── 4. Best offer логика ──────────────────────────────────────────────────
+    best_offer_on  = (row.get("best_offer") or "").strip().upper() == "ON"
+    best_offer_qty = int(row.get("best_offer_qty") or 0)
+
+    if best_offer_on and best_offer_qty > 0 and account:
+        with orderbook_lock:
+            ob = orderbook_cache.get(isin) or {}
+        offers = ob.get("offer") or []
+
+        if not offers:
+            logger.info(f"   Best offer: стакан офферов пуст — пропускаем")
+        else:
+            best_ask     = float(offers[0].get("price", 0))
+            price_step   = get_price_step(qp, board, isin)
+            target_price = round(best_ask - price_step, 8)
+
+            with best_offer_lock:
+                active = best_offer_orders.get(isin)
+
+            if active is None:
+                # Нет активной заявки — выставляем
+                send_best_offer_order(qp, board, isin, target_price,
+                                      best_offer_qty, account, client_code)
+
+            elif abs(active["price"] - target_price) > price_step * 0.01:
+                # Кто-то встал впереди — снимаем и перевыставляем
+                logger.info(
+                    f"   Best offer: цена изменилась "
+                    f"{active['price']} → {target_price}, перевыставляем"
+                )
+                cancel_best_offer_order(qp, board, isin,
+                                        active["order_num"], account)
+                time.sleep(0.3)
+                send_best_offer_order(qp, board, isin, target_price,
+                                      best_offer_qty, account, client_code)
+            else:
+                logger.info(f"   Best offer: заявка актуальна @ {active['price']}")
+    elif best_offer_on and not account:
+        logger.warning(f"   Best offer: аккаунт не задан для {name}")
 
 
-# ─── Основной цикл ────────────────────────────────────────────────────────────
+# ─── Основной цикл ───────────────────────────────────────────────────────────
 def robot():
     cleanup_flag()
     logger.info("=== Робот запущен ===")
@@ -364,19 +482,22 @@ def robot():
 
     try:
         qp = QuikPy()
-        # Вешаем колбэк на обновления стакана
         qp.on_quote.subscribe(on_quote_callback)
+        qp.on_order.subscribe(on_order_callback)
+        qp.on_trade.subscribe(on_trade_callback)
         logger.info("✅ Подключение к QUIK установлено")
 
         conn = psycopg2.connect(**DB_CONFIG)
         conn.autocommit = True
         logger.info("✅ Подключение к БД установлено")
 
-        # ── Одноразовое чтение настроек при старте ──────────────────────────
+        # Одноразовые настройки при старте
         try:
             proxy = fetch_active_proxy(conn)
-            logger.info(f"🌐 Прокси: {proxy['host']}:{proxy['port']}" if proxy
-                        else "🌐 Прокси не выбран")
+            logger.info(
+                f"🌐 Прокси: {proxy['host']}:{proxy['port']}" if proxy
+                else "🌐 Прокси не выбран"
+            )
         except Exception as e:
             logger.warning(f"⚠️ Прокси: {e}")
             proxy = None
@@ -388,20 +509,15 @@ def robot():
             logger.warning(f"⚠️ tg_enabled: {e}")
             tg_enabled = False
 
-        # ── Подписка на стаканы ─────────────────────────────────────────────
+        # Подписка на стаканы
         instruments = fetch_instruments(conn)
         logger.info(f"📋 Инструментов в БД: {len(instruments)}")
-
         subscribe_all_books(qp, instruments)
-
-        # Небольшая пауза — даём QUIK время прислать первые данные
         time.sleep(2)
-
         preload_orderbooks(qp, instruments)
 
-        # ── Основной цикл ───────────────────────────────────────────────────
+        # Основной цикл
         iteration = 0
-
         while not should_stop():
             iteration += 1
             logger.info(f"=== Итерация {iteration} ===")
@@ -415,7 +531,7 @@ def robot():
             for row in rows:
                 if should_stop():
                     break
-                process_instrument(conn, dict(row), proxy, tg_enabled)
+                process_instrument(conn, qp, dict(row), proxy, tg_enabled)
 
             logger.info(f"✅ Итерация {iteration} завершена, строк: {len(rows)}")
 
@@ -439,7 +555,6 @@ def robot():
     finally:
         if qp:
             try:
-                # Отписываемся от всех стаканов
                 if conn:
                     for row in fetch_instruments(conn):
                         try:
