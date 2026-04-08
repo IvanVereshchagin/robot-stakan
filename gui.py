@@ -36,7 +36,6 @@ HEADERS = [
     "Торговля",
     "Лучший\nоффер кол-во",
     "Лучший\nоффер",
-    "Лимит\nлучш. оффер",
     "Лимит\nцены",
     "Лимит\nбидов",
     "Тек. кол-во\nбид",
@@ -57,17 +56,16 @@ COL_FIELD = {
     3:  "trade_interval",       # Торговля
     4:  "best_offer_qty",       # Лучший оффер кол-во
     5:  "best_offer",           # Лучший оффер вкл/выкл
-    6: "best_offer_limit", 
-    7:  "price_limit",          # Лимит цены
-    8:  "bid_limit",            # Лимит бидов
-    9:  None,                   # Текущее кол-во бид (read-only)
-    10:  "trades_limit",         # Лимит сделок
-    11: None,                   # Кол-во сделок (read-only)
-    12: "big_bid_alert_qty",    # Большой бид алерт
-    13: "tgapi",               # API Telegram
-    14: "tgchat",              # Chat ID Telegram
-    15: "account",             # Аккаунт
-    16: "client_code",         # Код клиента
+    6:  "price_limit",          # Лимит цены
+    7:  "bid_limit",            # Лимит бидов
+    8:  None,                   # Текущее кол-во бид (read-only)
+    9:  "trades_limit",         # Лимит сделок
+    10: None,                   # Кол-во сделок (read-only)
+    11: "big_bid_alert_qty",    # Большой бид алерт
+    12: "tgapi",               # API Telegram
+    13: "tgchat",              # Chat ID Telegram
+    14: "account",             # Аккаунт
+    15: "client_code",         # Код клиента
 }
 
 
@@ -835,43 +833,41 @@ class MainWindow(QMainWindow):
         # 5 — Лучший оффер вкл/выкл (best_offer)
         self.table.setCellWidget(row, 5, ToggleWidget(isin, "best_offer", r.get("best_offer","OFF")))
 
-        self.table.setCellWidget(row, 6, DoubleSpinWidget(isin, "best_offer_limit", r.get("best_offer_limit", 0)))
-
         # 6 — Лимит цены (price_limit) — дробное
-        self.table.setCellWidget(row, 7, DoubleSpinWidget(isin, "price_limit", r.get("price_limit",0)))
+        self.table.setCellWidget(row, 6, DoubleSpinWidget(isin, "price_limit", r.get("price_limit",0)))
 
         # 7 — Лимит бидов (bid_limit)
-        self.table.setCellWidget(row, 8, SpinWidget(isin, "bid_limit", r.get("bid_limit",0)))
+        self.table.setCellWidget(row, 7, SpinWidget(isin, "bid_limit", r.get("bid_limit",0)))
 
         # 8 — Текущее кол-во бид (read-only)
-        self.table.setItem(row, 9, label(r.get("bid_curr", 0)))
+        self.table.setItem(row, 8, label(r.get("bid_curr", 0)))
 
         # 9 — Лимит сделок (trades_limit)
-        self.table.setCellWidget(row, 10, SpinWidget(isin, "trades_limit", r.get("trades_limit",0)))
+        self.table.setCellWidget(row, 9, SpinWidget(isin, "trades_limit", r.get("trades_limit",0)))
 
         # 10 — Кол-во сделок (read-only)
-        self.table.setItem(row, 11, label(r.get("trades_curr", 0)))
+        self.table.setItem(row, 10, label(r.get("trades_curr", 0)))
 
         # 11 — Большой бид алерт (big_bid_alert_qty)
-        self.table.setCellWidget(row, 12, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty",0)))
+        self.table.setCellWidget(row, 11, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty",0)))
 
         # 12 — API Telegram (combobox из таблицы tgapi)
-        self.table.setCellWidget(row, 13, ComboWidget(
+        self.table.setCellWidget(row, 12, ComboWidget(
             isin, "tgapi", db.fetch_tgapi, r.get("tgapi", "")
         ))
 
         # 13 — Chat ID Telegram (combobox из таблицы tgchat)
-        self.table.setCellWidget(row, 14, ComboWidget(
+        self.table.setCellWidget(row, 13, ComboWidget(
             isin, "tgchat", db.fetch_tgchat, r.get("tgchat", "")
         ))
 
         # 14 — Аккаунт
-        self.table.setCellWidget(row, 15, ComboWidget(
+        self.table.setCellWidget(row, 14, ComboWidget(
             isin, "account", db.fetch_accounts, r.get("account", "")
         ))
 
         # 15 — Код клиента
-        self.table.setCellWidget(row, 16, ComboWidget(
+        self.table.setCellWidget(row, 15, ComboWidget(
             isin, "client_code", db.fetch_client_codes, r.get("client_code", "")
         ))
 
@@ -1012,26 +1008,28 @@ class MainWindow(QMainWindow):
             r = isin_to_row.get(isin)
             if r is None:
                 continue
-            # col 8 — bid_curr
-            item8 = self.table.item(r, 8)
-            val8  = str(rec.get("bid_curr", 0))
-            if item8:
-                item8.setText(val8)
+            # col 9 — bid_curr (READ-ONLY)
+            item9 = self.table.item(r, 9)
+            val9  = str(rec.get("bid_curr", 0))
+            if item9:
+                item9.setText(val9)
             else:
                 from PyQt5.QtWidgets import QTableWidgetItem as _QTW
-                it = _QTW(val8)
+                it = _QTW(val9)
                 it.setTextAlignment(Qt.AlignCenter)
-                self.table.setItem(r, 8, it)
-            # col 10 — trades_curr
-            item10 = self.table.item(r, 10)
-            val10  = str(rec.get("trades_curr", 0))
-            if item10:
-                item10.setText(val10)
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(r, 9, it)
+            # col 11 — trades_curr (READ-ONLY)
+            item11 = self.table.item(r, 11)
+            val11  = str(rec.get("trades_curr", 0))
+            if item11:
+                item11.setText(val11)
             else:
                 from PyQt5.QtWidgets import QTableWidgetItem as _QTW
-                it = _QTW(val10)
+                it = _QTW(val11)
                 it.setTextAlignment(Qt.AlignCenter)
-                self.table.setItem(r, 10, it)
+                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
+                self.table.setItem(r, 11, it)
 
     def _read_log(self):
         log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robot.log")
