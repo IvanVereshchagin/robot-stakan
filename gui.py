@@ -833,41 +833,44 @@ class MainWindow(QMainWindow):
         # 5 — Лучший оффер вкл/выкл (best_offer)
         self.table.setCellWidget(row, 5, ToggleWidget(isin, "best_offer", r.get("best_offer","OFF")))
 
-        # 6 — Лимит цены (price_limit) — дробное
-        self.table.setCellWidget(row, 6, DoubleSpinWidget(isin, "price_limit", r.get("price_limit",0)))
+        # 6 — Лимит лучш. оффер (best_offer_limit)
+        self.table.setCellWidget(row, 6, DoubleSpinWidget(isin, "best_offer_limit", r.get("best_offer_limit", 0)))
 
-        # 7 — Лимит бидов (bid_limit)
-        self.table.setCellWidget(row, 7, SpinWidget(isin, "bid_limit", r.get("bid_limit",0)))
+        # 7 — Лимит цены (price_limit)
+        self.table.setCellWidget(row, 7, DoubleSpinWidget(isin, "price_limit", r.get("price_limit", 0)))
 
-        # 8 — Текущее кол-во бид (read-only)
-        self.table.setItem(row, 8, label(r.get("bid_curr", 0)))
+        # 8 — Лимит бидов (bid_limit)
+        self.table.setCellWidget(row, 8, SpinWidget(isin, "bid_limit", r.get("bid_limit", 0)))
 
-        # 9 — Лимит сделок (trades_limit)
-        self.table.setCellWidget(row, 9, SpinWidget(isin, "trades_limit", r.get("trades_limit",0)))
+        # 9 — Тек. кол-во бид (READ-ONLY)
+        self.table.setItem(row, 9, label(r.get("bid_curr", 0)))
 
-        # 10 — Кол-во сделок (read-only)
-        self.table.setItem(row, 10, label(r.get("trades_curr", 0)))
+        # 10 — Лимит сделок (trades_limit)
+        self.table.setCellWidget(row, 10, SpinWidget(isin, "trades_limit", r.get("trades_limit", 0)))
 
-        # 11 — Большой бид алерт (big_bid_alert_qty)
-        self.table.setCellWidget(row, 11, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty",0)))
+        # 11 — Кол-во сделок (READ-ONLY)
+        self.table.setItem(row, 11, label(r.get("trades_curr", 0)))
 
-        # 12 — API Telegram (combobox из таблицы tgapi)
-        self.table.setCellWidget(row, 12, ComboWidget(
+        # 12 — Большой бид алерт (big_bid_alert_qty)
+        self.table.setCellWidget(row, 12, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty", 0)))
+
+        # 13 — API Telegram
+        self.table.setCellWidget(row, 13, ComboWidget(
             isin, "tgapi", db.fetch_tgapi, r.get("tgapi", "")
         ))
 
-        # 13 — Chat ID Telegram (combobox из таблицы tgchat)
-        self.table.setCellWidget(row, 13, ComboWidget(
+        # 14 — Chat ID Telegram
+        self.table.setCellWidget(row, 14, ComboWidget(
             isin, "tgchat", db.fetch_tgchat, r.get("tgchat", "")
         ))
 
-        # 14 — Аккаунт
-        self.table.setCellWidget(row, 14, ComboWidget(
+        # 15 — Аккаунт
+        self.table.setCellWidget(row, 15, ComboWidget(
             isin, "account", db.fetch_accounts, r.get("account", "")
         ))
 
-        # 15 — Код клиента
-        self.table.setCellWidget(row, 15, ComboWidget(
+        # 16 — Код клиента
+        self.table.setCellWidget(row, 16, ComboWidget(
             isin, "client_code", db.fetch_client_codes, r.get("client_code", "")
         ))
 
@@ -889,7 +892,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dlg.exec_()
-        self._refresh_combos(12)     # ← обновляем все комбобоксы API после закрытия
+        self._refresh_combos(13)     # ← col 13 = API Telegram
 
     def on_tgchat_clicked(self):
         dlg = TelegramListDialog(
@@ -901,7 +904,7 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dlg.exec_()
-        self._refresh_combos(13)     # ← обновляем все комбобоксы Chat ID после закрытия
+        self._refresh_combos(14)     # ← col 14 = Chat ID Telegram
 
     def on_robot_clicked(self):
         if self._robot_process is None or self._robot_process.poll() is not None:
