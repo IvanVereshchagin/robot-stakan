@@ -292,6 +292,11 @@ def process_instrument(conn, row: dict, proxy: Optional[dict], tg_enabled: bool 
     board = row.get("board", "—")
 
     logger.info(f"── {name} ({isin}) ──")
+
+    if (row.get("condition") or "").strip().upper() != "ON":
+
+        return 
+    
     for key, value in row.items():
         logger.info(f"   {key} = {value}")
 
