@@ -543,64 +543,82 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     # ── 4. Best offer логика ──────────────────────────────────────────────────
     best_offer_on  = (row.get("best_offer") or "").strip().upper() == "ON"
     best_offer_qty = int(row.get("best_offer_qty") or 0)
+    best_offer_limit = float(row.get("best_offer_limit") or 0)
 
+    # 4.0 — выключен → снять заявку если есть
     if not best_offer_on:
         with best_offer_lock:
             active = best_offer_orders.get(isin)
         if active:
-            logger.info(f"   Best offer выключен — снимаем заявку {active['order_num']}")
+            logger.info(f"   Best offer ВЫКЛ — снимаем {active['order_num']}")
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
-        # не выходим из функции — остальная логика (bid_curr, алерты) уже отработала
+        return
 
-    if best_offer_on and best_offer_qty > 0 and account:
-        with orderbook_lock:
-            ob = orderbook_cache.get(isin) or {}
-        offers = ob.get("offer") or []
+    if not (best_offer_qty > 0 and account):
+        logger.warning(f"   Best offer: аккаунт или qty не заданы для {name}")
+        return
 
-        if not offers:
-            logger.info(f"   Best offer: стакан офферов пуст — пропускаем")
+    # 4.1 — читаем стакан
+    with orderbook_lock:
+        ob = orderbook_cache.get(isin) or {}
+    offers = ob.get("offer") or []
+
+    if not offers:
+        logger.info(f"   Best offer: стакан офферов пуст — пропускаем")
+        return
+
+    best_ask   = float(offers[0].get("price", 0))
+    price_step = get_price_step(qp, board, isin)
+
+    with best_offer_lock:
+        active = best_offer_orders.get(isin)
+
+    our_price   = round(float(active["price"]),   8) if active else None
+    our_balance = int(active.get("balance") or 0) if active else 0
+    best_ask_r  = round(best_ask, 8)
+
+    # 4.2 — наша заявка стоит по цене лучшего оффера
+    if our_price is not None and abs(our_price - best_ask_r) < price_step * 0.01:
+        if our_balance == best_offer_qty:
+            # Правило 4: стоим верно, кол-во совпадает — игнорируем
+            logger.info(f"   Best offer: ✅ стоим @ {our_price}, qty={our_balance} — ок")
         else:
-            best_ask          = float(offers[0].get("price", 0))
-            price_step        = get_price_step(qp, board, isin)
-            target_price      = round(best_ask - price_step, 8)
-            best_offer_limit  = float(row.get("best_offer_limit") or 0)
+            # Правило 7: частичное исполнение — перевыставляем по той же цене
+            logger.info(
+                f"   Best offer: частичное исполнение "
+                f"balance={our_balance} != qty={best_offer_qty} "
+                f"@ {our_price} — перевыставляем"
+            )
+            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+            time.sleep(0.3)
+            send_best_offer_order(qp, board, isin, our_price,
+                                  best_offer_qty, account, client_code)
+        return
 
-            # Если расчётная цена <= лимиту — не встаём, снимаем если стоим
-            if best_offer_limit > 0 and target_price <= best_offer_limit:
-                logger.info(
-                    f"   Best offer: target {target_price} <= лимит {best_offer_limit}"
-                    f" — не выставляем"
-                )
-                with best_offer_lock:
-                    active = best_offer_orders.get(isin)
-                if active:
-                    cancel_best_offer_order(qp, board, isin,
-                                            active["order_num"], account)
-                return  # не выставляем
+    # 4.3 — нашей заявки по цене best_ask нет → цель = best_ask - шаг
+    target_price = round(best_ask - price_step, 8)
 
-            with best_offer_lock:
-                active = best_offer_orders.get(isin)
+    # Правило 6: ниже лимита — не выставляем, снимаем если стоим
+    if best_offer_limit > 0 and target_price <= best_offer_limit:
+        logger.info(
+            f"   Best offer: target {target_price} <= лимит {best_offer_limit} — не выставляем"
+        )
+        if active:
+            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+        return
 
-            if active is None:
-                # Нет активной заявки — выставляем
-                send_best_offer_order(qp, board, isin, target_price,
-                                      best_offer_qty, account, client_code)
+    if active:
+        # Правило 5b: наша заявка по другой цене → снимаем и перевыставляем
+        logger.info(
+            f"   Best offer: цена изменилась {our_price} → {target_price}, перевыставляем"
+        )
+        cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+        time.sleep(0.3)
 
-            elif abs(active["price"] - target_price) > price_step * 0.01:
-                # Кто-то встал впереди — снимаем и перевыставляем
-                logger.info(
-                    f"   Best offer: цена изменилась "
-                    f"{active['price']} → {target_price}, перевыставляем"
-                )
-                cancel_best_offer_order(qp, board, isin,
-                                        active["order_num"], account)
-                time.sleep(0.3)
-                send_best_offer_order(qp, board, isin, target_price,
-                                      best_offer_qty, account, client_code)
-            else:
-                logger.info(f"   Best offer: заявка актуальна @ {active['price']}")
-    elif best_offer_on and not account:
-        logger.warning(f"   Best offer: аккаунт не задан для {name}")
+    # Правило 5: выставляем по best_ask - шаг
+    logger.info(f"   Best offer: выставляем {best_offer_qty} @ {target_price}")
+    send_best_offer_order(qp, board, isin, target_price,
+                          best_offer_qty, account, client_code)
 
 
 # ─── Основной цикл ───────────────────────────────────────────────────────────
