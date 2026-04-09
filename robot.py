@@ -409,6 +409,67 @@ def cleanup_best_offer_db(conn) -> None:
     except Exception as e:
         logger.warning(f"⚠️ Ошибка очистки best_offer таблиц: {e}")
 
+# ─── Проверка заявок при старте ──────────────────────────────────────────────
+def startup_check_best_offers(qp: QuikPy, conn) -> None:
+    """
+    Выполняется один раз перед основным циклом.
+    Читает все записи best_offer_orders из БД, для каждой запрашивает
+    статус заявки у QUIK и снимает её если она ещё активна в рынке.
+    После этого чистит таблицы best_offer_orders и best_offer_trades.
+    """
+    logger.info("🔍 Стартовая проверка заявок best_offer в БД...")
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM best_offer_orders")
+            rows = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"⚠️ Стартовая проверка: не удалось прочитать best_offer_orders: {e}")
+        return
+
+    if not rows:
+        logger.info("✅ Стартовая проверка: таблица best_offer_orders пуста — ок")
+        return
+
+    logger.info(f"⚠️ Стартовая проверка: найдено {len(rows)} записей в best_offer_orders — проверяем в QUIK")
+
+    cancelled = 0
+    for row in rows:
+        order_num = str(row.get("order_num") or "")
+        board     = str(row.get("board")     or "")
+        isin      = str(row.get("isin")      or "")
+        account   = str(row.get("account")   or "")
+
+        if not order_num:
+            continue
+
+        # Спрашиваем QUIK актуальный статус заявки
+        try:
+            resp  = qp.get_order_by_number(board, int(order_num))
+            flags = int((resp.get("data") or {}).get("flags") or 0)
+            is_active_in_market = bool(flags & 0x1)
+        except Exception as e:
+            # Если QUIK не знает заявку — считаем её неактивной, просто пропускаем
+            logger.warning(f"⚠️ Стартовая проверка: get_order_by_number({order_num}) → {e}")
+            is_active_in_market = False
+
+        if is_active_in_market:
+            try:
+                cancel_best_offer_order(qp, board, isin, order_num, account)
+                cancelled += 1
+                logger.info(f"   ❌ Снята живая заявка {order_num} ({isin})")
+            except Exception as e:
+                logger.warning(f"⚠️ Стартовая проверка: не удалось снять {order_num}: {e}")
+        else:
+            logger.info(f"   ✅ Заявка {order_num} ({isin}) уже неактивна в рынке")
+
+    if cancelled:
+        logger.info(f"⏳ Ждём 1.5 сек чтобы QUIK обработал снятие...")
+        time.sleep(1.5)
+
+    cleanup_best_offer_db(conn)
+    logger.info("✅ Стартовая проверка завершена")
+
+
 # ─── Обработка одной строки ──────────────────────────────────────────────────
 def process_instrument(conn, qp: QuikPy, row: dict,
                        proxy: Optional[dict], tg_enabled: bool = False):
@@ -585,6 +646,9 @@ def robot():
         subscribe_all_books(qp, instruments)
         time.sleep(2)
         preload_orderbooks(qp, instruments)
+
+        # Стартовая проверка остатков заявок от прошлого сеанса
+        startup_check_best_offers(qp, conn)
 
         # Основной цикл
         iteration = 0
