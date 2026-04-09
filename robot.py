@@ -579,10 +579,10 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     best_ask_r  = round(best_ask, 8)
 
     # 4.2 — наша заявка стоит по цене лучшего оффера (мы best offer)
+        # 4.2 — наша заявка стоит по цене лучшего оффера
     if active and our_price is not None and abs(our_price - best_ask_r) < price_step * 0.01:
 
-        # Если лимит в GUI подняли выше нашей текущей цены —
-        # снимаем заявку и ждём, пока target_price станет выше лимита
+        # Если лимит изменили из GUI и он стал выше/равен нашей цене — снимаем и ждём
         if best_offer_limit > 0 and our_price <= best_offer_limit:
             logger.info(
                 f"   Best offer: текущая цена {our_price} <= лимит {best_offer_limit} — снимаем и ждём"
@@ -590,10 +590,32 @@ def process_instrument(conn, qp: QuikPy, row: dict,
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
             return
 
-        # Уже стоим лучшим оффером — ничего не делаем, чтобы не было мигания
+        # Стоим лучшим оффером полным объёмом — ничего не делаем
+        if our_balance == best_offer_qty:
+            logger.info(
+                f"   Best offer: ✅ уже стоим лучшим оффером @ {our_price}, "
+                f"balance={our_balance} — ок"
+            )
+            return
+
+        # Частично исполнили: надо восстановить полный объём best_offer_qty
+        if 0 < our_balance < best_offer_qty:
+            logger.info(
+                f"   Best offer: частично съели заявку "
+                f"({our_balance} из {best_offer_qty}) @ {our_price} — восстанавливаем объём"
+            )
+            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+            time.sleep(0.3)
+            send_best_offer_order(
+                qp, board, isin, our_price,
+                best_offer_qty, account, client_code
+            )
+            return
+
+        # На всякий случай: если balance пришёл 0 или кривой, ничего резко не делаем.
+        # Полное исполнение обработается через callbacks и следующую итерацию.
         logger.info(
-            f"   Best offer: ✅ уже стоим лучшим оффером @ {our_price}, "
-            f"balance={our_balance} — ничего не делаем"
+            f"   Best offer: balance={our_balance}, ждём подтверждения из QUIK"
         )
         return
 
