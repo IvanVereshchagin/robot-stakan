@@ -575,34 +575,26 @@ def process_instrument(conn, qp: QuikPy, row: dict,
         active = best_offer_orders.get(isin)
 
     our_price   = round(float(active["price"]),   8) if active else None
-    our_balance = int(active.get("balance") or 0) if active else 0
+    our_balance = int(active.get("balance") or active.get("qty") or 0) if active else 0
     best_ask_r  = round(best_ask, 8)
 
     # 4.2 — наша заявка стоит по цене лучшего оффера (мы best offer)
-    if our_price is not None and abs(our_price - best_ask_r) < price_step * 0.01:
+    if active and our_price is not None and abs(our_price - best_ask_r) < price_step * 0.01:
 
-        # Лимит изменился из GUI — снимаем
+        # Если лимит в GUI подняли выше нашей текущей цены —
+        # снимаем заявку и ждём, пока target_price станет выше лимита
         if best_offer_limit > 0 and our_price <= best_offer_limit:
             logger.info(
-                f"   Best offer: наша цена {our_price} <= лимит {best_offer_limit} — снимаем"
+                f"   Best offer: текущая цена {our_price} <= лимит {best_offer_limit} — снимаем и ждём"
             )
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
             return
 
-        if our_balance == best_offer_qty:
-            # Правило 4: стоим верно, кол-во совпадает — игнорируем
-            logger.info(f"   Best offer: ✅ стоим @ {our_price}, balance={our_balance} — ок")
-        else:
-            # Правило 7: частичное исполнение — перевыставляем по той же цене
-            logger.info(
-                f"   Best offer: частичное исполнение "
-                f"balance={our_balance} != qty={best_offer_qty} "
-                f"@ {our_price} — перевыставляем"
-            )
-            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
-            time.sleep(0.3)
-            send_best_offer_order(qp, board, isin, our_price,
-                                  best_offer_qty, account, client_code)
+        # Уже стоим лучшим оффером — ничего не делаем, чтобы не было мигания
+        logger.info(
+            f"   Best offer: ✅ уже стоим лучшим оффером @ {our_price}, "
+            f"balance={our_balance} — ничего не делаем"
+        )
         return
 
     # 4.3 — нашей заявки по цене best_ask нет → цель = best_ask - шаг
