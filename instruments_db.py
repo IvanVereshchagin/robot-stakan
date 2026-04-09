@@ -193,9 +193,9 @@ DDL_STATEMENTS = [
 # Поля, которые пользователь может редактировать
 ALLOWED_FIELDS = {
     "condition", "battle_regime", "trade_interval",
-    "best_offer_qty", "best_offer", "price_limit",
-    "bid_limit", "trades_limit", "big_bid_alert_qty",
-    "tgapi", "tgchat", "account", "client_code",
+    "best_offer_qty", "best_offer", "best_offer_limit",  # ← добавить
+    "price_limit", "bid_limit", "trades_limit",
+    "big_bid_alert_qty", "tgapi", "tgchat", "account", "client_code",
 }
 
 

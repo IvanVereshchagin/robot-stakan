@@ -36,6 +36,7 @@ HEADERS = [
     "Торговля",
     "Лучший\nоффер кол-во",
     "Лучший\nоффер",
+    "Лимит\nлучш. оффер",   # ← добавить
     "Лимит\nцены",
     "Лимит\nбидов",
     "Тек. кол-во\nбид",
@@ -50,24 +51,24 @@ HEADERS = [
 
 # Соответствие индекса колонки → поле БД (None = read-only отображение)
 COL_FIELD = {
-    0:  None,                   # Название
-    1:  "condition",            # Состояние
-    2:  "battle_regime",        # Боевой режим
-    3:  "trade_interval",       # Торговля
-    4:  "best_offer_qty",       # Лучший оффер кол-во
-    5:  "best_offer",           # Лучший оффер вкл/выкл
-    6:  "price_limit",          # Лимит цены
-    7:  "bid_limit",            # Лимит бидов
-    8:  None,                   # Текущее кол-во бид (read-only)
-    9:  "trades_limit",         # Лимит сделок
-    10: None,                   # Кол-во сделок (read-only)
-    11: "big_bid_alert_qty",    # Большой бид алерт
-    12: "tgapi",               # API Telegram
-    13: "tgchat",              # Chat ID Telegram
-    14: "account",             # Аккаунт
-    15: "client_code",         # Код клиента
+    0:  None,
+    1:  "condition",
+    2:  "battle_regime",
+    3:  "trade_interval",
+    4:  "best_offer_qty",
+    5:  "best_offer",
+    6:  "best_offer_limit",   # ← добавить
+    7:  "price_limit",
+    8:  "bid_limit",
+    9:  None,
+    10: "trades_limit",
+    11: None,
+    12: "big_bid_alert_qty",
+    13: "tgapi",
+    14: "tgchat",
+    15: "account",
+    16: "client_code",
 }
-
 
 # ─── Виджет: радиокнопки Вкл / Выкл ─────────────────────────────────────────
 class ToggleWidget(QWidget):
