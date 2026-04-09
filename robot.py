@@ -118,6 +118,7 @@ def on_order_callback(data):
                 "order_num": ORDER_NUM,
                 "price":     float(PRICE or 0),
                 "qty":       QTY,
+                "balance":   BALANCE,
             }
         else:
             best_offer_orders.pop(ISIN, None)
@@ -577,11 +578,20 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     our_balance = int(active.get("balance") or 0) if active else 0
     best_ask_r  = round(best_ask, 8)
 
-    # 4.2 — наша заявка стоит по цене лучшего оффера
+    # 4.2 — наша заявка стоит по цене лучшего оффера (мы best offer)
     if our_price is not None and abs(our_price - best_ask_r) < price_step * 0.01:
+
+        # Лимит изменился из GUI — снимаем
+        if best_offer_limit > 0 and our_price <= best_offer_limit:
+            logger.info(
+                f"   Best offer: наша цена {our_price} <= лимит {best_offer_limit} — снимаем"
+            )
+            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+            return
+
         if our_balance == best_offer_qty:
             # Правило 4: стоим верно, кол-во совпадает — игнорируем
-            logger.info(f"   Best offer: ✅ стоим @ {our_price}, qty={our_balance} — ок")
+            logger.info(f"   Best offer: ✅ стоим @ {our_price}, balance={our_balance} — ок")
         else:
             # Правило 7: частичное исполнение — перевыставляем по той же цене
             logger.info(
