@@ -608,6 +608,10 @@ def process_instrument(conn, qp: QuikPy, row: dict,
         return
 
     if active:
+        if abs(our_price - target_price) < price_step * 0.01:
+            # Уже стоим по нужной цене — ничего не делаем
+            logger.info(f"   Best offer: ✅ стоим @ {our_price} (target={target_price}) — ок")
+            return
         # Правило 5b: наша заявка по другой цене → снимаем и перевыставляем
         logger.info(
             f"   Best offer: цена изменилась {our_price} → {target_price}, перевыставляем"
