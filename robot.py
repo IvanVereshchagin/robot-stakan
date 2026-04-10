@@ -589,8 +589,19 @@ def process_instrument(conn, qp: QuikPy, row: dict,
 
 
     # ── 2.1 Battle regime: sell при превышении bid_limit ─────────────────────
+   # ── 2.1 Battle regime: sell при превышении bid_limit ─────────────────────
     if battle_regime_on and price_limit > 0 and bid_limit > 0 and account:
-        if bid_curr > bid_limit:
+
+        # Вне торгового интервала battle-заявку не ставим
+        if not is_now_in_trade_interval(trade_interval):
+            logger.info(
+                f"   ⚔️ Battle regime: текущее время вне trade_interval "
+                f"({trade_interval}) — заявку не выставляем"
+            )
+            with battle_lock:
+                battle_triggered[isin] = False
+
+        elif bid_curr > bid_limit:
             with battle_lock:
                 already_triggered = battle_triggered.get(isin, False)
 
@@ -615,20 +626,18 @@ def process_instrument(conn, qp: QuikPy, row: dict,
                     logger.warning(f"⚠️ Battle regime {isin}: не удалось выставить заявку: {e}")
             else:
                 logger.info(
-                    f"   ⚔️ Battle regime: превышение уже обработано ранее, "
-                    f"повторно не выставляем"
+                    f"   ⚔️ Battle regime: превышение уже обработано ранее, повторно не выставляем"
                 )
+
         else:
-            # Возврат в норму — разрешаем следующее срабатывание
             with battle_lock:
                 if battle_triggered.get(isin):
                     logger.info(
-                        f"   ⚔️ Battle regime: bid_curr снова <= bid_limit, "
-                        f"сбрасываем триггер"
+                        f"   ⚔️ Battle regime: bid_curr снова <= bid_limit, сбрасываем триггер"
                     )
                 battle_triggered[isin] = False
+
     else:
-        # Если battle_regime выключен или параметры невалидны — триггер сбрасываем
         with battle_lock:
             battle_triggered[isin] = False
 
