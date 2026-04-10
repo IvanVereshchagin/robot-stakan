@@ -595,6 +595,20 @@ def process_instrument(conn, qp: QuikPy, row: dict,
 
     logger.info(f"── {name} ({isin}) ──")
 
+    
+    price_limit       = float(row.get("price_limit")    or 0)
+    bid_limit         = int(row.get("bid_limit")         or 0)
+    big_bid_alert_qty = int(row.get("big_bid_alert_qty") or 0)
+    tgapi             = (row.get("tgapi")  or "").strip()
+    tgchat            = (row.get("tgchat") or "").strip()
+    tg_ready          = tg_enabled and bool(tgapi) and bool(tgchat)
+    account           = (row.get("account")     or "").strip()
+    client_code       = (row.get("client_code") or "").strip()
+    battle_regime_on  = (row.get("battle_regime") or "").strip().upper() == "ON"
+    trade_interval = str(row.get("trade_interval") or "10:00-23:50").strip()
+    trades_limit      = int(row.get("trades_limit") or 0)
+    trades_curr_row   = int(row.get("trades_curr") or 0)
+
 
     try:
         curr_trade_qty_sum = fetch_trade_qty_sum(conn, isin)
@@ -617,7 +631,25 @@ def process_instrument(conn, qp: QuikPy, row: dict,
             )
     except Exception as e:
         logger.warning(f"⚠️ Ошибка обновления trades_curr для {isin}: {e}")
-        
+
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(trades_curr, 0), COALESCE(trades_limit, 0) "
+                "FROM instruments WHERE isin = %s",
+                (isin,)
+            )
+            row_limits = cur.fetchone() or (0, 0)
+        trades_curr_live = int(row_limits[0] or 0)
+        trades_limit_live = int(row_limits[1] or 0)
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось прочитать trades_curr/trades_limit для {isin}: {e}")
+        trades_curr_live = trades_curr_row
+        trades_limit_live = trades_limit
+
+    trades_limit_hit = trades_limit_live > 0 and trades_curr_live >= trades_limit_live
+
 
     # Пропускаем если condition != ON
     if (row.get("condition") or "").strip().upper() != "ON":
@@ -633,16 +665,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     for key, value in row.items():
         logger.info(f"   {key} = {value}")
 
-    price_limit       = float(row.get("price_limit")    or 0)
-    bid_limit         = int(row.get("bid_limit")         or 0)
-    big_bid_alert_qty = int(row.get("big_bid_alert_qty") or 0)
-    tgapi             = (row.get("tgapi")  or "").strip()
-    tgchat            = (row.get("tgchat") or "").strip()
-    tg_ready          = tg_enabled and bool(tgapi) and bool(tgchat)
-    account           = (row.get("account")     or "").strip()
-    client_code       = (row.get("client_code") or "").strip()
-    battle_regime_on  = (row.get("battle_regime") or "").strip().upper() == "ON"
-    trade_interval = str(row.get("trade_interval") or "10:00-23:50").strip()
+    
 
     # ── 1. bid_curr ───────────────────────────────────────────────────────────
     try:
@@ -652,6 +675,9 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     except Exception as e:
         logger.warning(f"⚠️ bid_curr для {name}: {e}")
         bid_curr = 0
+
+
+    
 
     # ── 2. Алерт bid_curr >= bid_limit ───────────────────────────────────────
     if bid_limit > 0 and bid_curr >= bid_limit:
@@ -670,7 +696,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
 
     # ── 2.1 Battle regime: sell при превышении bid_limit ─────────────────────
    # ── 2.1 Battle regime: sell при превышении bid_limit ─────────────────────
-    if battle_regime_on and price_limit > 0 and bid_limit > 0 and account:
+    if battle_regime_on and not trades_limit_hit and price_limit > 0 and bid_limit > 0 and account:
 
         if not is_now_in_trade_interval(trade_interval):
             logger.info(
@@ -716,6 +742,11 @@ def process_instrument(conn, qp: QuikPy, row: dict,
                     )
                 battle_triggered[isin] = False
     else:
+        if battle_regime_on and trades_limit_hit:
+            logger.info(
+                f"   ⚔️ Battle regime запрещён: trades_curr ({trades_curr_live}) "
+                f">= trades_limit ({trades_limit_live})"
+            )
         with battle_lock:
             battle_triggered[isin] = False
 
@@ -741,6 +772,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     
 
     # 4.0 — выключен → снять заявку если есть
+    # 4.0 — выключен → снять заявку если есть
     if not best_offer_on:
         with best_offer_lock:
             active = best_offer_orders.get(isin)
@@ -748,7 +780,26 @@ def process_instrument(conn, qp: QuikPy, row: dict,
             logger.info(f"   Best offer ВЫКЛ — снимаем {active['order_num']}")
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
         return
-    
+
+    # 4.0.1 — достигнут лимит сделок → best offer запрещён
+    if trades_limit_hit:
+        with best_offer_lock:
+            active = best_offer_orders.get(isin)
+
+        if active:
+            logger.info(
+                f"   Best offer запрещён: trades_curr ({trades_curr_live}) "
+                f">= trades_limit ({trades_limit_live}) — снимаем заявку {active['order_num']}"
+            )
+            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+        else:
+            logger.info(
+                f"   Best offer запрещён: trades_curr ({trades_curr_live}) "
+                f">= trades_limit ({trades_limit_live}) — новую заявку не ставим"
+            )
+        return
+
+    # 4.0.2 — вне интервала торговли → снять заявку если есть
     if not is_now_in_trade_interval(trade_interval):
         with best_offer_lock:
             active = best_offer_orders.get(isin)
