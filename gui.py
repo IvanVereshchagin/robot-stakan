@@ -70,6 +70,69 @@ COL_FIELD = {
     16: "client_code",
 }
 
+
+
+class TradesCurrWidget(QWidget):
+    """READ-ONLY число trades_curr + маленькая кнопка сброса в 0."""
+
+    def __init__(self, isin: str, value=0, parent=None):
+        super().__init__(parent)
+        self._isin = isin
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(4)
+
+        self._label = QLabel(str(value))
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setMinimumWidth(36)
+        self._label.setStyleSheet("""
+            QLabel {
+                color: #d0d0d0;
+                background: transparent;
+                border: none;
+                font-size: 12px;
+            }
+        """)
+        layout.addWidget(self._label, 1)
+
+        self._btn = QPushButton("↺")
+        self._btn.setToolTip("Сбросить счётчик сделок в 0")
+        self._btn.setFixedSize(20, 20)
+        self._btn.setCursor(Qt.PointingHandCursor)
+        self._btn.setStyleSheet("""
+            QPushButton {
+                background: #3a3a3a;
+                color: #bcbcbc;
+                border: 1px solid #555555;
+                border-radius: 4px;
+                font-size: 11px;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background: #4a4a4a;
+                color: #efefef;
+                border: 1px solid #777777;
+            }
+            QPushButton:pressed {
+                background: #2f2f2f;
+            }
+        """)
+        self._btn.clicked.connect(self._on_reset_clicked)
+        layout.addWidget(self._btn, 0, Qt.AlignCenter)
+
+    def set_value(self, value):
+        self._label.setText(str(value))
+
+    def _on_reset_clicked(self):
+        try:
+            db.reset_trades_curr(self._isin)
+            self.set_value(0)
+        except Exception as e:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось сбросить trades_curr:\n{e}")
+
+
+
 # ─── Виджет: радиокнопки Вкл / Выкл ─────────────────────────────────────────
 class ToggleWidget(QWidget):
     """ON/OFF через две радиокнопки. Сохраняет в БД при переключении."""
@@ -919,7 +982,7 @@ class MainWindow(QMainWindow):
         self.table.setCellWidget(row, 10, SpinWidget(isin, "trades_limit", r.get("trades_limit", 0)))
 
         # 11 — Кол-во сделок (READ-ONLY)
-        self.table.setItem(row, 11, label(r.get("trades_curr", 0)))
+        self.table.setCellWidget(row, 11, TradesCurrWidget(isin, r.get("trades_curr", 0)))
 
         # 12 — Большой бид алерт (big_bid_alert_qty)
         self.table.setCellWidget(row, 12, SpinWidget(isin, "big_bid_alert_qty", r.get("big_bid_alert_qty", 0)))
@@ -1106,16 +1169,14 @@ class MainWindow(QMainWindow):
                 it.setFlags(it.flags() & ~Qt.ItemIsEditable)
                 self.table.setItem(r, 9, it)
             # col 11 — trades_curr (READ-ONLY)
-            item11 = self.table.item(r, 11)
-            val11  = str(rec.get("trades_curr", 0))
-            if item11:
-                item11.setText(val11)
+            
+
+            w11 = self.table.cellWidget(r, 11)
+            val11 = rec.get("trades_curr", 0)
+            if hasattr(w11, "set_value"):
+                w11.set_value(val11)
             else:
-                from PyQt5.QtWidgets import QTableWidgetItem as _QTW
-                it = _QTW(val11)
-                it.setTextAlignment(Qt.AlignCenter)
-                it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-                self.table.setItem(r, 11, it)
+                self.table.setCellWidget(r, 11, TradesCurrWidget(isin, val11))
 
     def _read_log(self):
         log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robot.log")

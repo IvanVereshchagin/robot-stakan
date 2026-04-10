@@ -199,6 +199,15 @@ ALLOWED_FIELDS = {
 }
 
 
+def reset_trades_curr(isin: str) -> None:
+    con = get_connection()
+    with con.cursor() as cur:
+        cur.execute(
+            "UPDATE instruments SET trades_curr = 0 WHERE isin = %s",
+            (isin,)
+        )
+        
+
 # ─── Инициализация ───────────────────────────────────────────────────────────
 def _create_db_if_missing():
     conn = psycopg2.connect(**ADMIN)
