@@ -563,6 +563,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     account           = (row.get("account")     or "").strip()
     client_code       = (row.get("client_code") or "").strip()
     battle_regime_on  = (row.get("battle_regime") or "").strip().upper() == "ON"
+    trade_interval = str(row.get("trade_interval") or "10:00-23:50").strip()
 
     # ── 1. bid_curr ───────────────────────────────────────────────────────────
     try:
@@ -592,7 +593,6 @@ def process_instrument(conn, qp: QuikPy, row: dict,
    # ── 2.1 Battle regime: sell при превышении bid_limit ─────────────────────
     if battle_regime_on and price_limit > 0 and bid_limit > 0 and account:
 
-        # Вне торгового интервала battle-заявку не ставим
         if not is_now_in_trade_interval(trade_interval):
             logger.info(
                 f"   ⚔️ Battle regime: текущее время вне trade_interval "
@@ -636,7 +636,6 @@ def process_instrument(conn, qp: QuikPy, row: dict,
                         f"   ⚔️ Battle regime: bid_curr снова <= bid_limit, сбрасываем триггер"
                     )
                 battle_triggered[isin] = False
-
     else:
         with battle_lock:
             battle_triggered[isin] = False
@@ -660,7 +659,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     best_offer_on  = (row.get("best_offer") or "").strip().upper() == "ON"
     best_offer_qty = int(row.get("best_offer_qty") or 0)
     best_offer_limit = float(row.get("best_offer_limit") or 0)
-    trade_interval = str(row.get("trade_interval") or "10:00-23:50").strip()
+    
 
     # 4.0 — выключен → снять заявку если есть
     if not best_offer_on:
