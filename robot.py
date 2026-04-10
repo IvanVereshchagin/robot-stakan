@@ -96,8 +96,19 @@ BEST_OFFER_TRANS_ID_PREFIX = "1212"
 BATTLE_TRANS_ID_PREFIX = "1313"
 
 
+TRADEABLE_TRANS_ID_PREFIXES = (
+    BEST_OFFER_TRANS_ID_PREFIX,
+    BATTLE_TRANS_ID_PREFIX,
+)
+
+
 battle_triggered: dict = {}
 battle_lock = RLock()
+
+
+prev_trade_qty_sum: dict = {}
+prev_trade_qty_lock = RLock()
+
 
 
 def send_battle_order(qp: QuikPy, board: str, isin: str,
@@ -215,7 +226,7 @@ def on_order_callback(data):
 def on_trade_callback(data):
     trade    = data.get("data") or {}
     trans_id = str(trade.get("trans_id") or "")
-    if not trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX):
+    if not trans_id.startswith(TRADEABLE_TRANS_ID_PREFIXES):
         return
 
     TRADE_NUM = str(trade.get("trade_num") or "")
@@ -230,8 +241,9 @@ def on_trade_callback(data):
     DT_TRADE  = parse_quik_dt(trade.get("datetime") or {})
 
     # Снимаем из кэша — process_instrument перевыставит на следующей итерации
-    with best_offer_lock:
-        best_offer_orders.pop(ISIN, None)
+    if trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX):
+        with best_offer_lock:
+            best_offer_orders.pop(ISIN, None)
 
     try:
         with psycopg2.connect(**DB_CONFIG) as conn:
@@ -248,7 +260,10 @@ def on_trade_callback(data):
                     TRADE_NUM, ORDER_NUM, PRICE, QTY, IS_SELL,
                     trans_id, ISIN, BOARD, ACCOUNT, DT_TRADE
                 ))
-        logger.info(f"💰 Сделка {TRADE_NUM} ({ISIN}) @ {PRICE} x {QTY} — перевыставим на след. итерации")
+        kind = "BEST_OFFER" if trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX) else "BATTLE"
+        logger.info(f"💰 Сделка {TRADE_NUM} [{kind}] ({ISIN}) @ {PRICE} x {QTY}")
+
+
     except Exception as e:
         logger.warning(f"⚠️ Ошибка записи сделки {TRADE_NUM}: {e}")
 
@@ -359,6 +374,46 @@ def update_bid_curr(conn, isin: str, bid_curr: int):
         cur.execute(
             "UPDATE instruments SET bid_curr = %s WHERE isin = %s",
             (bid_curr, isin)
+        )
+
+
+def fetch_trade_qty_sum(conn, isin: str) -> int:
+    """
+    Возвращает накопленную сумму qty по инструменту
+    только для сделок от заявок 1212 и 1313.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(qty), 0)
+            FROM best_offer_trades
+            WHERE isin = %s
+              AND (
+                    trans_id LIKE %s
+                 OR trans_id LIKE %s
+              )
+            """,
+            (
+                isin,
+                f"{BEST_OFFER_TRANS_ID_PREFIX}%",
+                f"{BATTLE_TRANS_ID_PREFIX}%"
+            )
+        )
+        row = cur.fetchone()
+    return int(row[0] or 0)
+
+
+def increment_trades_curr(conn, isin: str, delta_qty: int) -> None:
+    if delta_qty <= 0:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE instruments
+            SET trades_curr = COALESCE(trades_curr, 0) + %s
+            WHERE isin = %s
+            """,
+            (delta_qty, isin)
         )
 
 
@@ -539,6 +594,30 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     board = row.get("board", "—")
 
     logger.info(f"── {name} ({isin}) ──")
+
+
+    try:
+        curr_trade_qty_sum = fetch_trade_qty_sum(conn, isin)
+
+        with prev_trade_qty_lock:
+            prev_sum = prev_trade_qty_sum.get(isin, curr_trade_qty_sum)
+            delta_sum = curr_trade_qty_sum - prev_sum
+            prev_trade_qty_sum[isin] = curr_trade_qty_sum
+
+        if delta_sum > 0:
+            increment_trades_curr(conn, isin, delta_sum)
+            logger.info(
+                f"   trades_curr += {delta_sum} "
+                f"(prev_sum={prev_sum}, curr_sum={curr_trade_qty_sum})"
+            )
+        else:
+            logger.info(
+                f"   trades_curr: без изменений "
+                f"(prev_sum={prev_sum}, curr_sum={curr_trade_qty_sum})"
+            )
+    except Exception as e:
+        logger.warning(f"⚠️ Ошибка обновления trades_curr для {isin}: {e}")
+        
 
     # Пропускаем если condition != ON
     if (row.get("condition") or "").strip().upper() != "ON":
