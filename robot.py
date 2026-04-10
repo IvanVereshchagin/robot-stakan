@@ -93,6 +93,30 @@ best_offer_lock = RLock()
 
 # ─── TRANS_ID префикс best_offer ─────────────────────────────────────────────
 BEST_OFFER_TRANS_ID_PREFIX = "1212"
+BATTLE_TRANS_ID_PREFIX = "1313"
+
+
+battle_triggered: dict = {}
+battle_lock = RLock()
+
+
+def send_battle_order(qp: QuikPy, board: str, isin: str,
+                      price: float, qty: int,
+                      account: str, client_code: str) -> None:
+    qp.send_transaction({
+        "ACCOUNT":     account,
+        "CLIENT_CODE": client_code,
+        "TYPE":        "L",
+        "OPERATION":   "S",
+        "CLASSCODE":   board,
+        "SECCODE":     isin,
+        "PRICE":       str(price),
+        "QUANTITY":    str(qty),
+        "TRANS_ID":    BATTLE_TRANS_ID_PREFIX,
+        "ACTION":      "NEW_ORDER",
+    })
+    logger.info(f"Battle order выставлен: {isin} SELL {qty} @ {price}")
+
 
 # ─── Вспомогательная: парсинг datetime из QUIK ───────────────────────────────
 def parse_quik_dt(d: dict) -> str:
@@ -538,6 +562,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     tg_ready          = tg_enabled and bool(tgapi) and bool(tgchat)
     account           = (row.get("account")     or "").strip()
     client_code       = (row.get("client_code") or "").strip()
+    battle_regime_on  = (row.get("battle_regime") or "").strip().upper() == "ON"
 
     # ── 1. bid_curr ───────────────────────────────────────────────────────────
     try:
@@ -561,6 +586,51 @@ def process_instrument(conn, qp: QuikPy, row: dict,
                 logger.info(f"📨 TG → {tgchat}: алерт bid_limit")
         else:
             logger.info("   (TG отключён или не настроен)")
+
+
+    # ── 2.1 Battle regime: sell при превышении bid_limit ─────────────────────
+    if battle_regime_on and price_limit > 0 and bid_limit > 0 and account:
+        if bid_curr > bid_limit:
+            with battle_lock:
+                already_triggered = battle_triggered.get(isin, False)
+
+            if not already_triggered:
+                logger.info(
+                    f"   ⚔️ Battle regime: bid_curr ({bid_curr}) > bid_limit ({bid_limit}) "
+                    f"→ выставляем SELL {bid_limit} @ {price_limit}"
+                )
+                try:
+                    send_battle_order(
+                        qp=qp,
+                        board=board,
+                        isin=isin,
+                        price=price_limit,
+                        qty=bid_limit,
+                        account=account,
+                        client_code=client_code,
+                    )
+                    with battle_lock:
+                        battle_triggered[isin] = True
+                except Exception as e:
+                    logger.warning(f"⚠️ Battle regime {isin}: не удалось выставить заявку: {e}")
+            else:
+                logger.info(
+                    f"   ⚔️ Battle regime: превышение уже обработано ранее, "
+                    f"повторно не выставляем"
+                )
+        else:
+            # Возврат в норму — разрешаем следующее срабатывание
+            with battle_lock:
+                if battle_triggered.get(isin):
+                    logger.info(
+                        f"   ⚔️ Battle regime: bid_curr снова <= bid_limit, "
+                        f"сбрасываем триггер"
+                    )
+                battle_triggered[isin] = False
+    else:
+        # Если battle_regime выключен или параметры невалидны — триггер сбрасываем
+        with battle_lock:
+            battle_triggered[isin] = False
 
     # ── 3. Алерт крупные биды ────────────────────────────────────────────────
     if big_bid_alert_qty > 0:
