@@ -11,6 +11,42 @@ from QuikPy import QuikPy
 import requests
 from typing import Optional
 from decimal import Decimal
+from datetime import datetime
+
+
+def parse_trade_interval(interval_str: str):
+    """
+    '10:00-23:50' -> (time(10,00), time(23,50))
+    Поддерживает и ночной интервал, например '23:00-02:00'.
+    """
+    try:
+        raw = (interval_str or "").strip()
+        left, right = raw.split("-", 1)
+        start_t = datetime.strptime(left.strip(), "%H:%M").time()
+        end_t   = datetime.strptime(right.strip(), "%H:%M").time()
+        return start_t, end_t
+    except Exception:
+        return None, None
+
+
+def is_now_in_trade_interval(interval_str: str) -> bool:
+    """
+    True  -> текущее системное время внутри trade_interval
+    False -> вне интервала или формат кривой
+    """
+    start_t, end_t = parse_trade_interval(interval_str)
+    if start_t is None or end_t is None:
+        return False
+
+    now_t = datetime.now().time().replace(second=0, microsecond=0)
+
+    # обычный интервал
+    if start_t <= end_t:
+        return start_t <= now_t <= end_t
+
+    # интервал через полночь, например 23:00-02:00
+    return now_t >= start_t or now_t <= end_t
+
 
 # ─── Логирование ─────────────────────────────────────────────────────────────
 LOG_PATH = os.path.join(os.path.dirname(__file__), "robot.log")
@@ -545,6 +581,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     best_offer_on  = (row.get("best_offer") or "").strip().upper() == "ON"
     best_offer_qty = int(row.get("best_offer_qty") or 0)
     best_offer_limit = float(row.get("best_offer_limit") or 0)
+    trade_interval = str(row.get("trade_interval") or "10:00-23:50").strip()
 
     # 4.0 — выключен → снять заявку если есть
     if not best_offer_on:
@@ -553,6 +590,23 @@ def process_instrument(conn, qp: QuikPy, row: dict,
         if active:
             logger.info(f"   Best offer ВЫКЛ — снимаем {active['order_num']}")
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+        return
+    
+    if not is_now_in_trade_interval(trade_interval):
+        with best_offer_lock:
+            active = best_offer_orders.get(isin)
+
+        if active:
+            logger.info(
+                f"   Best offer: текущее время вне trade_interval "
+                f"({trade_interval}) — снимаем заявку {active['order_num']}"
+            )
+            cancel_best_offer_order(qp, board, isin, active["order_num"], account)
+        else:
+            logger.info(
+                f"   Best offer: текущее время вне trade_interval "
+                f"({trade_interval}) — новую заявку не ставим"
+            )
         return
 
     if not (best_offer_qty > 0 and account):
