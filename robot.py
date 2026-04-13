@@ -126,7 +126,7 @@ def send_battle_order(qp: QuikPy, board: str, isin: str,
         "TRANS_ID":    BATTLE_TRANS_ID_PREFIX,
         "ACTION":      "NEW_ORDER",
     })
-    logger.info(f"Battle order выставлен: {isin} SELL {qty} @ {price}")
+    logger.info(f"Заливаем в стакан. {isin} SELL {qty} @ {price}")
 
 
 # ─── Вспомогательная: парсинг datetime из QUIK ───────────────────────────────
@@ -217,7 +217,7 @@ def on_order_callback(data):
                     ISIN, BOARD, ACCOUNT, CLIENT_CODE, DT_PLACE, DT_KILL
                 ))
         status = "активна" if IS_ACTIVE else "снята"
-        logger.info(f"📋 Заявка {ORDER_NUM} ({ISIN}) {status} @ {PRICE} x {QTY}")
+        logger.info(f"Заявка ({ISIN}) {status} @ {PRICE} x {QTY}")
     except Exception as e:
         logger.warning(f"⚠️ Ошибка записи заявки {ORDER_NUM}: {e}")
 
@@ -260,8 +260,8 @@ def on_trade_callback(data):
                     TRADE_NUM, ORDER_NUM, PRICE, QTY, IS_SELL,
                     trans_id, ISIN, BOARD, ACCOUNT, DT_TRADE
                 ))
-        kind = "BEST_OFFER" if trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX) else "BATTLE"
-        logger.info(f"💰 Сделка {TRADE_NUM} [{kind}] ({ISIN}) @ {PRICE} x {QTY}")
+        kind = "BEST_OFFER" if trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX) else "Залив"
+        logger.info(f"💰 Сделка  [{kind}] ({ISIN}) @ {PRICE} x {QTY}")
 
 
     except Exception as e:
@@ -318,10 +318,10 @@ def send_telegram(tgapi: str, chat_id: str, text: str, proxy: Optional[dict]) ->
         resp = session.post(url, json={"chat_id": chat_id, "text": text}, timeout=30)
         if resp.status_code == 200:
             return True
-        logger.warning(f"⚠️ TG {resp.status_code}: {resp.text[:120]}")
+        # logger.warning(f"⚠️ TG {resp.status_code}: {resp.text[:120]}")
         return False
     except Exception as e:
-        logger.warning(f"⚠️ Ошибка TG ({chat_id}): {e}")
+        # logger.warning(f"⚠️ Ошибка TG ({chat_id}): {e}")
         return False
     finally:
         session.close()
@@ -593,7 +593,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     isin  = row.get("isin",  "—")
     board = row.get("board", "—")
 
-    logger.info(f"── {name} ({isin}) ──")
+    # logger.info(f"── {name} ({isin}) ──")
 
     
     price_limit       = float(row.get("price_limit")    or 0)
@@ -620,15 +620,16 @@ def process_instrument(conn, qp: QuikPy, row: dict,
 
         if delta_sum > 0:
             increment_trades_curr(conn, isin, delta_sum)
-            logger.info(
-                f"   trades_curr += {delta_sum} "
-                f"(prev_sum={prev_sum}, curr_sum={curr_trade_qty_sum})"
-            )
+            # logger.info(
+            #     f"   trades_curr += {delta_sum} "
+            #     f"(prev_sum={prev_sum}, curr_sum={curr_trade_qty_sum})"
+            # )
         else:
-            logger.info(
-                f"   trades_curr: без изменений "
-                f"(prev_sum={prev_sum}, curr_sum={curr_trade_qty_sum})"
-            )
+            # logger.info(
+            #     f"   trades_curr: без изменений "
+            #     f"(prev_sum={prev_sum}, curr_sum={curr_trade_qty_sum})"
+            # )
+            pass
     except Exception as e:
         logger.warning(f"⚠️ Ошибка обновления trades_curr для {isin}: {e}")
 
@@ -644,7 +645,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
         trades_curr_live = int(row_limits[0] or 0)
         trades_limit_live = int(row_limits[1] or 0)
     except Exception as e:
-        logger.warning(f"⚠️ Не удалось прочитать trades_curr/trades_limit для {isin}: {e}")
+        # logger.warning(f"⚠️ Не удалось прочитать trades_curr/trades_limit для {isin}: {e}")
         trades_curr_live = trades_curr_row
         trades_limit_live = trades_limit
 
@@ -653,17 +654,17 @@ def process_instrument(conn, qp: QuikPy, row: dict,
 
     # Пропускаем если condition != ON
     if (row.get("condition") or "").strip().upper() != "ON":
-        logger.info(f"   ⏭ Пропускаем — condition = {row.get('condition')}")
+        # logger.info(f"   ⏭ Пропускаем — condition = {row.get('condition')}")
         with best_offer_lock:
             active = best_offer_orders.get(isin)
         if active:
             account = (row.get("account") or "").strip()
-            logger.info(f"   Снимаем best_offer т.к. condition=OFF: {isin}")
+            # logger.info(f"   Снимаем best_offer т.к. condition=OFF: {isin}")
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
         return
 
-    for key, value in row.items():
-        logger.info(f"   {key} = {value}")
+    # for key, value in row.items():
+    #     logger.info(f"   {key} = {value}")
 
     
 
@@ -671,7 +672,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     try:
         bid_curr = calc_bid_curr(isin, price_limit)
         update_bid_curr(conn, isin, bid_curr)
-        logger.info(f"   bid_curr = {bid_curr}  (price_limit >= {price_limit})")
+        # logger.info(f"   bid_curr = {bid_curr}  (price_limit >= {price_limit})")
     except Exception as e:
         logger.warning(f"⚠️ bid_curr для {name}: {e}")
         bid_curr = 0
@@ -690,8 +691,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
         if tg_ready:
             if send_telegram(tgapi, tgchat, msg, proxy):
                 logger.info(f"📨 TG → {tgchat}: алерт bid_limit")
-        else:
-            logger.info("   (TG отключён или не настроен)")
+        
 
 
     # ── 2.1 Battle regime: sell при превышении bid_limit ─────────────────────
@@ -699,10 +699,10 @@ def process_instrument(conn, qp: QuikPy, row: dict,
     if battle_regime_on and not trades_limit_hit and price_limit > 0 and bid_limit > 0 and account:
 
         if not is_now_in_trade_interval(trade_interval):
-            logger.info(
-                f"   ⚔️ Battle regime: текущее время вне trade_interval "
-                f"({trade_interval}) — заявку не выставляем"
-            )
+            # logger.info(
+            #     f"   ⚔️ Battle regime: текущее время вне trade_interval "
+            #     f"({trade_interval}) — заявку не выставляем"
+            # )
             with battle_lock:
                 battle_triggered[isin] = False
 
@@ -712,7 +712,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
 
             if not already_triggered:
                 logger.info(
-                    f"   ⚔️ Battle regime: bid_curr ({bid_curr}) > bid_limit ({bid_limit}) "
+                    f"   ⚔️ Боевой режим: bid_curr ({bid_curr}) > bid_limit ({bid_limit}) "
                     f"→ выставляем SELL {bid_limit} @ {price_limit}"
                 )
                 try:
@@ -729,24 +729,24 @@ def process_instrument(conn, qp: QuikPy, row: dict,
                         battle_triggered[isin] = True
                 except Exception as e:
                     logger.warning(f"⚠️ Battle regime {isin}: не удалось выставить заявку: {e}")
-            else:
-                logger.info(
-                    f"   ⚔️ Battle regime: превышение уже обработано ранее, повторно не выставляем"
-                )
+            # else:
+            #     logger.info(
+            #         f"   ⚔️ Battle regime: превышение уже обработано ранее, повторно не выставляем"
+            #     )
 
         else:
             with battle_lock:
-                if battle_triggered.get(isin):
-                    logger.info(
-                        f"   ⚔️ Battle regime: bid_curr снова <= bid_limit, сбрасываем триггер"
-                    )
+                # if battle_triggered.get(isin):
+                #     logger.info(
+                #         f"   ⚔️ Battle regime: bid_curr снова <= bid_limit, сбрасываем триггер"
+                #     )
                 battle_triggered[isin] = False
     else:
-        if battle_regime_on and trades_limit_hit:
-            logger.info(
-                f"   ⚔️ Battle regime запрещён: trades_curr ({trades_curr_live}) "
-                f">= trades_limit ({trades_limit_live})"
-            )
+        # if battle_regime_on and trades_limit_hit:
+        #     logger.info(
+        #         f"   ⚔️ Battle regime запрещён: trades_curr ({trades_curr_live}) "
+        #         f">= trades_limit ({trades_limit_live})"
+        #     )
         with battle_lock:
             battle_triggered[isin] = False
 
@@ -762,8 +762,8 @@ def process_instrument(conn, qp: QuikPy, row: dict,
             if tg_ready:
                 if send_telegram(tgapi, tgchat, msg, proxy):
                     logger.info(f"📨 TG → {tgchat}: алерт big_bid")
-            else:
-                logger.info("   (TG отключён или не настроен)")
+            # else:
+            #     logger.info("   (TG отключён или не настроен)")
 
     # ── 4. Best offer логика ──────────────────────────────────────────────────
     best_offer_on  = (row.get("best_offer") or "").strip().upper() == "ON"
@@ -777,7 +777,7 @@ def process_instrument(conn, qp: QuikPy, row: dict,
         with best_offer_lock:
             active = best_offer_orders.get(isin)
         if active:
-            logger.info(f"   Best offer ВЫКЛ — снимаем {active['order_num']}")
+            # logger.info(f"   Best offer ВЫКЛ — снимаем {active['order_num']}")
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
         return
 
@@ -787,16 +787,16 @@ def process_instrument(conn, qp: QuikPy, row: dict,
             active = best_offer_orders.get(isin)
 
         if active:
-            logger.info(
-                f"   Best offer запрещён: trades_curr ({trades_curr_live}) "
-                f">= trades_limit ({trades_limit_live}) — снимаем заявку {active['order_num']}"
-            )
+            # logger.info(
+            #     f"   Best offer запрещён: trades_curr ({trades_curr_live}) "
+            #     f">= trades_limit ({trades_limit_live}) — снимаем заявку {active['order_num']}"
+            # )
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
-        else:
-            logger.info(
-                f"   Best offer запрещён: trades_curr ({trades_curr_live}) "
-                f">= trades_limit ({trades_limit_live}) — новую заявку не ставим"
-            )
+        # else:
+        #     logger.info(
+        #         f"   Best offer запрещён: trades_curr ({trades_curr_live}) "
+        #         f">= trades_limit ({trades_limit_live}) — новую заявку не ставим"
+        #     )
         return
 
     # 4.0.2 — вне интервала торговли → снять заявку если есть
@@ -805,16 +805,16 @@ def process_instrument(conn, qp: QuikPy, row: dict,
             active = best_offer_orders.get(isin)
 
         if active:
-            logger.info(
-                f"   Best offer: текущее время вне trade_interval "
-                f"({trade_interval}) — снимаем заявку {active['order_num']}"
-            )
+            # logger.info(
+            #     f"   Best offer: текущее время вне trade_interval "
+            #     f"({trade_interval}) — снимаем заявку {active['order_num']}"
+            # )
             cancel_best_offer_order(qp, board, isin, active["order_num"], account)
-        else:
-            logger.info(
-                f"   Best offer: текущее время вне trade_interval "
-                f"({trade_interval}) — новую заявку не ставим"
-            )
+        # else:
+        #     logger.info(
+        #         f"   Best offer: текущее время вне trade_interval "
+        #         f"({trade_interval}) — новую заявку не ставим"
+        #     )
         return
 
     if not (best_offer_qty > 0 and account):
@@ -876,9 +876,9 @@ def process_instrument(conn, qp: QuikPy, row: dict,
 
         # На всякий случай: если balance пришёл 0 или кривой, ничего резко не делаем.
         # Полное исполнение обработается через callbacks и следующую итерацию.
-        logger.info(
-            f"   Best offer: balance={our_balance}, ждём подтверждения из QUIK"
-        )
+        # logger.info(
+        #     f"   Best offer: balance={our_balance}, ждём подтверждения из QUIK"
+        # )
         return
 
     # 4.3 — нашей заявки по цене best_ask нет → цель = best_ask - шаг
@@ -962,7 +962,7 @@ def robot():
         iteration = 0
         while not should_stop():
             iteration += 1
-            logger.info(f"=== Итерация {iteration} ===")
+
 
             try:
                 rows = fetch_instruments(conn)
@@ -975,12 +975,11 @@ def robot():
                     break
                 process_instrument(conn, qp, dict(row), proxy, tg_enabled)
 
-            logger.info(f"✅ Итерация {iteration} завершена, строк: {len(rows)}")
+           
 
             try:
                 decay = fetch_decay(conn)
             except Exception as e:
-                logger.warning(f"⚠️ decay: {e}")
                 decay = 1.0
 
             logger.info(f"⏱ Задержка {decay} сек.")
