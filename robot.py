@@ -688,8 +688,8 @@ def process_instrument(conn, qp: QuikPy, row: dict,
             f"Превышает лимит: {bid_limit} шт"
         )
         logger.info(f"   🔔 bid_curr ({bid_curr}) >= bid_limit ({bid_limit})")
-        # if tg_ready:
-        #     if send_telegram(tgapi, tgchat, msg, proxy):
+        if tg_ready:
+            send_telegram(tgapi, tgchat, msg, proxy)
         #         logger.info(f"📨 TG → {tgchat}: алерт bid_limit")
         
 
@@ -759,8 +759,8 @@ def process_instrument(conn, qp: QuikPy, row: dict,
                 lines.append(f"  цена {p:.4f} — {q} шт")
             msg = "\n".join(lines)
             logger.info(f"   🐋 Крупные биды: {hits}")
-            # if tg_ready:
-            #     if send_telegram(tgapi, tgchat, msg, proxy):
+            if tg_ready:
+                send_telegram(tgapi, tgchat, msg, proxy)
             #         logger.info(f"📨 TG → {tgchat}: алерт big_bid")
             # else:
             #     logger.info("   (TG отключён или не настроен)")
