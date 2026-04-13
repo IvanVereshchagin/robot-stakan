@@ -240,33 +240,50 @@ def on_trade_callback(data):
     ACCOUNT   = trade.get("account")
     DT_TRADE  = parse_quik_dt(trade.get("datetime") or {})
 
-    # Снимаем из кэша — process_instrument перевыставит на следующей итерации
+    # Для best_offer убираем из кэша, чтобы робот мог перевыставиться
     if trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX):
         with best_offer_lock:
             best_offer_orders.pop(ISIN, None)
 
+    kind = "Лучший оффер" if trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX) else "Залив"
+
     try:
         with psycopg2.connect(**DB_CONFIG) as conn:
             with conn.cursor() as cur:
+                # Пишем сделку только один раз.
+                # Если trade_num уже есть — повторный TG не шлём.
                 cur.execute("""
                     INSERT INTO best_offer_trades (
                         trade_num, order_num, price, qty, is_sell,
                         trans_id, isin, board, account, dt_trade
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    ON CONFLICT (trade_num) DO UPDATE SET
-                        qty   = EXCLUDED.qty,
-                        price = EXCLUDED.price
+                    ON CONFLICT (trade_num) DO NOTHING
+                    RETURNING trade_num
                 """, (
                     TRADE_NUM, ORDER_NUM, PRICE, QTY, IS_SELL,
                     trans_id, ISIN, BOARD, ACCOUNT, DT_TRADE
                 ))
-        kind = "BEST_OFFER" if trans_id.startswith(BEST_OFFER_TRANS_ID_PREFIX) else "Залив"
-        logger.info(f"💰 Сделка  [{kind}] ({ISIN}) @ {PRICE} x {QTY}")
+                inserted = cur.fetchone() is not None
 
+            logger.info(f"💰 Сделка [{kind}] ({ISIN}) @ {PRICE} x {QTY}")
+
+            # TG шлём только для новой сделки
+            if inserted:
+                tg_enabled, tgapi, tgchat, proxy, instrument_name = \
+                    fetch_trade_telegram_context(conn, ISIN)
+
+                if tg_enabled and tgapi and tgchat:
+                    msg = (
+                        f"💰 Сделка робота\n"
+                        f"{instrument_name}"
+                        f"Тип: {kind}\n"
+                        f"Цена: {PRICE}\n"
+                        f"Кол-во: {QTY}\n"
+                    )
+                    send_telegram(tgapi, tgchat, msg, proxy)
 
     except Exception as e:
         logger.warning(f"⚠️ Ошибка записи сделки {TRADE_NUM}: {e}")
-
 
 # ─── Подписка / инициализация стаканов ───────────────────────────────────────
 def subscribe_all_books(qp: QuikPy, instruments: list):
@@ -350,6 +367,41 @@ def fetch_tg_enabled(conn) -> bool:
         cur.execute("SELECT tg_enabled FROM tg_settings WHERE id = 1")
         row = cur.fetchone()
     return bool(row[0]) if row else False
+
+
+def fetch_trade_telegram_context(conn, isin: str):
+    """
+    Возвращает настройки TG для конкретного инструмента:
+    tg_enabled, tgapi, tgchat, proxy, instrument_name
+    """
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute("""
+            SELECT
+                COALESCE(i.name, i.isin) AS name,
+                COALESCE(i.tgapi, '')    AS tgapi,
+                COALESCE(i.tgchat, '')   AS tgchat,
+                COALESCE(ts.tg_enabled, FALSE) AS tg_enabled
+            FROM instruments i
+            CROSS JOIN tg_settings ts
+            WHERE i.isin = %s
+              AND ts.id = 1
+            LIMIT 1
+        """, (isin,))
+        row = cur.fetchone()
+
+    proxy = fetch_active_proxy(conn)
+
+    if not row:
+        return False, "", "", proxy, isin
+
+    return (
+        bool(row["tg_enabled"]),
+        str(row["tgapi"] or "").strip(),
+        str(row["tgchat"] or "").strip(),
+        proxy,
+        str(row["name"] or isin),
+    )
+
 
 
 # ─── Расчёт bid_curr ─────────────────────────────────────────────────────────
